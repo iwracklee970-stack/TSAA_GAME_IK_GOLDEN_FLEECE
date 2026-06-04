@@ -1,0 +1,8 @@
+{
+  "name": "Argonauts: The Sunken Fleece",
+  "description": "A pixel art side-scrolling adventure game exploring ancient Greek ruins with a magical lantern.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
