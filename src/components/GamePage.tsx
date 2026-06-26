@@ -158,10 +158,11 @@ export default function GamePage({ onExit }: GamePageProps) {
 
     // Standard ruins backgrounds
     const farImg = new Image();
-    farImg.src = '/bg_far.png';
+    const baseUrl = import.meta.env.BASE_URL;
+    farImg.src = baseUrl + 'bg_far.png';
     farImg.onload = () => { bgImagesRef.current.far = farImg; };
-    processChromaKey('/bg_mid.png', '#ffffff').then((canvas) => { bgImagesRef.current.mid = canvas; });
-    processChromaKey('/bg_fore.png', '#ffffff').then((canvas) => { bgImagesRef.current.fore = canvas; });
+    processChromaKey(baseUrl + 'bg_mid.png', '#ffffff').then((canvas) => { bgImagesRef.current.mid = canvas; });
+    processChromaKey(baseUrl + 'bg_fore.png', '#ffffff').then((canvas) => { bgImagesRef.current.fore = canvas; });
   }, []);
 
   const resetPlayer = useCallback((lvlIndex: number) => {
@@ -810,7 +811,7 @@ export default function GamePage({ onExit }: GamePageProps) {
                   Expedition Route — Georgia to the Aegean
                 </p>
                 <img
-                  src="/journey_map.png"
+                  src={`${import.meta.env.BASE_URL}journey_map.png`}
                   alt="Journey Map from Georgia to Greece"
                   style={{ width: '100%', maxHeight: '420px', objectFit: 'cover', border: '3px solid #5a3a10', boxShadow: '0 0 30px rgba(0,0,0,0.6)', marginBottom: '22px' }}
                 />
