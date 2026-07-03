@@ -2,10 +2,10 @@ import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { useGameLoop } from '../hooks/useGameLoop';
 import { PlayerState, Level, AfterImage, Bullet } from '../types';
 import { LEVELS } from '../levels';
-import { drawPlayer, drawSkeleton, drawBullet } from './sprites';
+import { drawPlayer, drawSkeleton, drawBullet, drawHarpy, drawWallLurker } from './sprites';
 import {
   drawBackground, drawPlatform, drawDoor, drawTrigger,
-  drawCollectible, drawDecoration, drawLighting
+  drawCollectible, drawDecoration, drawLighting, drawCheckpoint
 } from './worldRenderer';
 
 // ==============================
@@ -103,6 +103,9 @@ function createPlayer(level: Level): PlayerState {
     jumpReleased: true,
     bullets: 6,
     afterimages: [],
+    health: 3,
+    invincibleTimer: 0,
+    hurtTimer: 0,
   };
 }
 
@@ -114,11 +117,15 @@ export default function GamePage({ onExit }: GamePageProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [gameState, setGameState] = useState<'menu' | 'playing' | 'win' | 'lost'>('playing');
   const [levelIndex, setLevelIndex] = useState(0);
+  const [playerHealth, setPlayerHealth] = useState(3); // React state so HUD re-renders
   const [collected, setCollected] = useState(0);
   const [showHint, setShowHint] = useState('');
   const [bookOpen, setBookOpen] = useState(false);
   const [bookPage, setBookPage] = useState(1);
   const [transitioning, setTransitioning] = useState(false);
+
+  // Ref for levelIndex so the game loop always sees the current value
+  const levelIndexRef = useRef(0);
 
   const bgImagesRef = useRef<{
     far: HTMLImageElement | HTMLCanvasElement | null;
@@ -147,6 +154,9 @@ export default function GamePage({ onExit }: GamePageProps) {
     bullets: [] as Bullet[],
     shootCooldown: 0,
     journeyStarted: false,
+    // Checkpoint tracking
+    checkpoint: null as { x: number; y: number } | null,
+    checkpointBullets: 6,
   });
 
   // Initialize level ref and preload background assets
@@ -165,27 +175,98 @@ export default function GamePage({ onExit }: GamePageProps) {
     processChromaKey(baseUrl + 'bg_fore.png', '#ffffff').then((canvas) => { bgImagesRef.current.fore = canvas; });
   }, []);
 
-  const resetPlayer = useCallback((lvlIndex: number) => {
-    const levels = cloneLevels();
-    gameRef.current.levels = levels;
-    const level = levels[lvlIndex];
-    gameRef.current.level = level;
-    gameRef.current.player = createPlayer(level);
-    gameRef.current.camera = { x: 0, y: 0 };
-    gameRef.current.totalCollected = 0;
-    gameRef.current.hintTimer = 0;
-    gameRef.current.bullets = [];
-    gameRef.current.shootCooldown = 0;
-    setCollected(0);
-    setShowHint('');
+  // Split reset into full/hard reset or soft checkpoint reload
+  const resetPlayer = useCallback((lvlIndex: number, softRespawn = false, currentHealth = 3) => {
+    if (!softRespawn) {
+      // Hard reset (e.g. game over or level transition)
+      const levels = cloneLevels();
+      gameRef.current.levels = levels;
+      const level = levels[lvlIndex];
+      gameRef.current.level = level;
+      gameRef.current.player = createPlayer(level);
+      gameRef.current.checkpoint = null;
+      gameRef.current.checkpointBullets = 6;
+      gameRef.current.camera = { x: 0, y: 0 };
+      gameRef.current.totalCollected = 0;
+      gameRef.current.bullets = [];
+      gameRef.current.shootCooldown = 0;
+      setPlayerHealth(3);
+      setCollected(0);
+      setShowHint('');
+    } else {
+      // Soft respawn at last checkpoint — preserve remaining health
+      const { player, level } = gameRef.current;
+      if (level) {
+        const cp = gameRef.current.checkpoint || level.entrance;
+        player.x = cp.x;
+        player.y = cp.y;
+        player.vx = 0;
+        player.vy = 0;
+        player.health = currentHealth;
+        setPlayerHealth(currentHealth);
+        player.invincibleTimer = 1.2;  // brief i-frame buffer on respawn
+        player.grounded = false;
+        player.isDashing = false;
+        player.dashInvincible = false;
+        player.hurtTimer = 0;
+        player.bullets = gameRef.current.checkpointBullets;
+        gameRef.current.bullets = [];
+        gameRef.current.shootCooldown = 0;
+        setShowHint(`Respawned — ${currentHealth} ❤ remaining`);
+        gameRef.current.hintTimer = 2;
+      }
+    }
   }, []);
 
   const startGame = useCallback(() => {
     setLevelIndex(0);
-    resetPlayer(0);
+    levelIndexRef.current = 0;
+    resetPlayer(0, false);
     setGameState('playing');
     setShowHint('Arrow keys to move, Space to jump/double-jump, L to dash, J to shoot');
     gameRef.current.hintTimer = 5;
+  }, [resetPlayer]);
+
+  // Keep levelIndexRef in sync with React state
+  useEffect(() => {
+    levelIndexRef.current = levelIndex;
+  }, [levelIndex]);
+
+  // ── takeDamage ──────────────────────────────────────────────────────────────
+  // Stored in a ref so the game loop can call it without stale React closures.
+  // Called whenever the player is hit by an enemy OR falls into a pit.
+  const takeDamageRef = useRef((isFromFall = false, enemyX?: number) => { /* will be set below */ });
+  useEffect(() => {
+    takeDamageRef.current = (isFromFall = false, enemyX?: number) => {
+      const player = gameRef.current.player;
+      // Skip if already invincible (unless it's a fall)
+      if (!isFromFall && (player.dashInvincible || player.invincibleTimer > 0)) return;
+
+      const newHealth = player.health - 1;
+      player.health = newHealth;
+      player.invincibleTimer = 1.5;
+      setPlayerHealth(newHealth); // update HUD
+
+      if (newHealth <= 0) {
+        setGameState('lost');
+      } else if (isFromFall) {
+        // Soft-respawn preserving remaining health ONLY on fall
+        resetPlayer(levelIndexRef.current, true, newHealth);
+      } else {
+        // Knockback from enemy (Mario/Goomba style)
+        player.hurtTimer = 0.4; // lock keyboard inputs for 0.4s
+        player.animState = 'hurt';
+        player.grounded = false;
+
+        // Push player horizontally away from enemy center
+        if (enemyX !== undefined) {
+          player.vx = player.x < enemyX ? -350 : 350;
+        } else {
+          player.vx = -player.direction * 350;
+        }
+        player.vy = -320; // Hop up slightly in pain
+      }
+    };
   }, [resetPlayer]);
 
   // Keyboard
@@ -267,6 +348,20 @@ export default function GamePage({ onExit }: GamePageProps) {
     // --- Dash cooldown ---
     if (player.dashCooldown > 0) player.dashCooldown -= dt;
 
+    // --- Hurt timer tick ---
+    if (player.hurtTimer > 0) {
+      player.hurtTimer -= dt;
+      if (player.hurtTimer <= 0) {
+        player.hurtTimer = 0;
+      }
+    }
+
+    // --- Fall death ---
+    if (player.y > 700) {
+      takeDamageRef.current(true);
+      return;
+    }
+
     // --- Dash logic ---
     if (player.isDashing) {
       player.dashTimer -= dt;
@@ -289,6 +384,9 @@ export default function GamePage({ onExit }: GamePageProps) {
           });
         }
       }
+    } else if (player.hurtTimer > 0) {
+      // Controls locked. Just apply gravity
+      player.vy += GRAVITY * dt;
     } else {
       // --- Normal Movement ---
       const BASE_SPEED = 120; // Starts slow for micro-movements
@@ -357,7 +455,7 @@ export default function GamePage({ onExit }: GamePageProps) {
     // Friction
     if (!player.isDashing) {
       const isMoving = (keys['ArrowLeft'] || keys['KeyA'] || keys['ArrowRight'] || keys['KeyD']);
-      if (!isMoving) player.vx *= FRICTION;
+      if (!isMoving || player.hurtTimer > 0) player.vx *= FRICTION;
     }
 
     // Move
@@ -371,7 +469,9 @@ export default function GamePage({ onExit }: GamePageProps) {
 
     // --- Animation state ---
     const prevAnimState = player.animState;
-    if (player.isDashing) {
+    if (player.hurtTimer > 0) {
+      player.animState = 'hurt';
+    } else if (player.isDashing) {
       player.animState = 'dash';
     } else if (!player.grounded) {
       player.animState = player.vy < 0 ? 'jump_rise' : 'jump_fall';
@@ -392,6 +492,8 @@ export default function GamePage({ onExit }: GamePageProps) {
         player.animFrame = (player.animFrame + 1) % 2;
         player.animTimer = 0;
       }
+    } else if (player.animState === 'hurt') {
+      player.animFrame = 0;
     } else if (player.animState === 'jump_rise' || player.animState === 'jump_fall') {
       player.animFrame = 0;
     } else if (player.animState === 'walk') {
@@ -452,9 +554,16 @@ export default function GamePage({ onExit }: GamePageProps) {
       }
     });
 
+    // --- Tick invincibility ---
+    if (player.invincibleTimer > 0) {
+      player.invincibleTimer -= dt;
+    }
+
     // --- Fall death ---
     if (player.y > 700) {
-      setGameState('lost');
+      // Force invincibleTimer to 0 so takeDamage won't skip — fall always hurts
+      player.invincibleTimer = 0;
+      takeDamageRef.current(true);
       return;
     }
 
@@ -495,9 +604,10 @@ export default function GamePage({ onExit }: GamePageProps) {
         setTransitioning(true);
         setTimeout(() => {
           setTransitioning(false);
-          const nextIdx = levelIndex + 1;
+          const nextIdx = levelIndexRef.current + 1;
           if (nextIdx < LEVELS.length) {
             setLevelIndex(nextIdx);
+            levelIndexRef.current = nextIdx;
             resetPlayer(nextIdx);
             setShowHint(`Level ${nextIdx + 1}: ${LEVELS[nextIdx].name}`);
             gameRef.current.hintTimer = 3;
@@ -523,6 +633,24 @@ export default function GamePage({ onExit }: GamePageProps) {
       }
     });
 
+    // --- Checkpoint trigger checks ---
+    if (level.checkpoints) {
+      level.checkpoints.forEach(cp => {
+        // Simple bounding box check around the checkpoint (20px width)
+        const cpW = 20;
+        const cpH = 40;
+        const touchingCp = player.x < cp.x + cpW/2 && player.x + player.width > cp.x - cpW/2 &&
+                           player.y < cp.y + cpH && player.y + player.height > cp.y;
+        if (touchingCp && !cp.activated) {
+          cp.activated = true;
+          gameRef.current.checkpoint = { x: cp.x, y: cp.y };
+          gameRef.current.checkpointBullets = player.bullets;
+          setShowHint('Checkpoint reached!');
+          gameRef.current.hintTimer = 2;
+        }
+      });
+    }
+
     // --- Collectibles ---
     level.collectibles.forEach(item => {
       if (item.collected) return;
@@ -537,6 +665,11 @@ export default function GamePage({ onExit }: GamePageProps) {
         }
         if (item.type === 'journal') {
           setBookOpen(true);
+          return;
+        }
+        if (item.type === 'scroll') {
+          setShowHint('Note: Tbilisi university archives, 1938. The Fleece awaits...');
+          gameRef.current.hintTimer = 4;
           return;
         }
         gameRef.current.totalCollected++;
@@ -554,26 +687,132 @@ export default function GamePage({ onExit }: GamePageProps) {
     level.enemies.forEach(enemy => {
       if (!enemy.alive) return;
 
-      enemy.x += enemy.speed * dt;
-      if (enemy.x > enemy.end || enemy.x < enemy.start) enemy.speed *= -1;
-      enemy.animTimer += dt * 1000;
-      if (enemy.animTimer > 250) {
-        enemy.animFrame = (enemy.animFrame + 1) % 4;
-        enemy.animTimer = 0;
+      // Update movement based on enemy type
+      if (enemy.type === 'skeleton') {
+        enemy.x += enemy.speed * dt;
+        if (enemy.x > enemy.end || enemy.x < enemy.start) enemy.speed *= -1;
+        enemy.animTimer += dt * 1000;
+        if (enemy.animTimer > 250) {
+          enemy.animFrame = (enemy.animFrame + 1) % 4;
+          enemy.animTimer = 0;
+        }
+      } else if (enemy.type === 'harpy') {
+        // Flying Harpy: horizontal patrol + vertical sine wave bobbing
+        enemy.x += enemy.speed * dt;
+        if (enemy.x > enemy.end || enemy.x < enemy.start) enemy.speed *= -1;
+        enemy.animTimer += dt * 1000;
+        if (enemy.animTimer > 150) {
+          enemy.animFrame = (enemy.animFrame + 1) % 2;
+          enemy.animTimer = 0;
+        }
+        
+        // Initialize base startY to prevent accumulation drift
+        if ((enemy as any).baseY === undefined) {
+          (enemy as any).baseY = enemy.y;
+        }
+        const phase = Date.now() / 300 + (enemy.flyOffset || 0);
+        // Oscilates smoothly by 16px around base height
+        enemy.y = (enemy as any).baseY + Math.sin(phase) * 16;
+      } else if (enemy.type === 'wall_lurker') {
+        // Wall Lurker state machine: wait -> extend -> hold -> retract
+        if (!enemy.lurkerPhase) enemy.lurkerPhase = 'waiting';
+        if (enemy.lurkerTimer === undefined) enemy.lurkerTimer = 0;
+        if (enemy.lurkerExtend === undefined) enemy.lurkerExtend = 0;
+
+        enemy.lurkerTimer += dt;
+        if (enemy.lurkerPhase === 'waiting') {
+          enemy.lurkerExtend = 0;
+          if (enemy.lurkerTimer >= 2.0) {
+            enemy.lurkerPhase = 'extending';
+            enemy.lurkerTimer = 0;
+          }
+        } else if (enemy.lurkerPhase === 'extending') {
+          enemy.lurkerExtend = Math.min(enemy.w, enemy.lurkerExtend + enemy.speed * dt);
+          if (enemy.lurkerExtend >= enemy.w) {
+            enemy.lurkerPhase = 'holding';
+            enemy.lurkerTimer = 0;
+          }
+        } else if (enemy.lurkerPhase === 'holding') {
+          enemy.lurkerExtend = enemy.w;
+          if (enemy.lurkerTimer >= 1.0) {
+            enemy.lurkerPhase = 'retracting';
+            enemy.lurkerTimer = 0;
+          }
+        } else if (enemy.lurkerPhase === 'retracting') {
+          enemy.lurkerExtend = Math.max(0, enemy.lurkerExtend - enemy.speed * dt);
+          if (enemy.lurkerExtend <= 0) {
+            enemy.lurkerPhase = 'waiting';
+            enemy.lurkerTimer = 0;
+          }
+        }
       }
 
-      // Check bullet collision
+      // Check bullet collision (wall lurkers are unkillable hazards, bullets just deactivate)
       bullets.forEach(b => {
-        if (b.active && b.x > enemy.x && b.x < enemy.x + enemy.w && b.y > enemy.y && b.y < enemy.y + enemy.h) {
+        if (!b.active) return;
+        
+        // Define hitbox check depending on enemy type
+        let isHit = false;
+        if (enemy.type === 'wall_lurker') {
+          const extendVal = enemy.lurkerExtend || 0;
+          if (extendVal > 2) {
+            const lurkX = enemy.lurkerSide === 'right' ? enemy.x - extendVal : enemy.x;
+            const lurkY = enemy.y;
+            const lurkW = enemy.lurkerSide === 'ceiling' ? enemy.w : extendVal;
+            const lurkH = enemy.lurkerSide === 'ceiling' ? extendVal : enemy.h;
+            if (b.x > lurkX && b.x < lurkX + lurkW && b.y > lurkY && b.y < lurkY + lurkH) {
+              isHit = true;
+            }
+          }
+        } else {
+          if (b.x > enemy.x && b.x < enemy.x + enemy.w && b.y > enemy.y && b.y < enemy.y + enemy.h) {
+            isHit = true;
+          }
+        }
+
+        if (isHit) {
           b.active = false;
-          enemy.alive = false;
+          if (enemy.type !== 'wall_lurker') {
+            enemy.alive = false;
+          }
         }
       });
 
-      if (!player.dashInvincible && enemy.alive) {
-        if (player.x < enemy.x + enemy.w && player.x + player.width > enemy.x &&
-            player.y < enemy.y + enemy.h && player.y + player.height > enemy.y) {
-          setGameState('lost');
+      // ── Player contact ─────────────────────────────────────────────────────
+      // Works for ALL enemy types: skeleton, harpy, wall_lurker.
+      // The invincibility guard lives inside takeDamageRef.
+      if (enemy.alive) {
+        let isColliding = false;
+
+        if (enemy.type === 'wall_lurker') {
+          // Lurker hitbox is the extended portion only
+          const extendVal = enemy.lurkerExtend || 0;
+          if (extendVal > 2) {
+            const lurkX = enemy.lurkerSide === 'right'
+              ? enemy.x - extendVal
+              : enemy.lurkerSide === 'ceiling'
+                ? enemy.x  // ceiling lurker: hitbox is vertical
+                : enemy.x;
+            // For ceiling lurkers, enemy.y is the ceiling attach point
+            const lurkerY = enemy.lurkerSide === 'ceiling' ? enemy.y : enemy.y;
+            const lurkerH = enemy.lurkerSide === 'ceiling' ? extendVal : enemy.h;
+            const lurkerW = enemy.lurkerSide === 'ceiling' ? enemy.w : extendVal;
+
+            if (player.x < lurkX + lurkerW && player.x + player.width > lurkX &&
+                player.y < lurkerY + lurkerH && player.y + player.height > lurkerY) {
+              isColliding = true;
+            }
+          }
+        } else {
+          // Skeleton & Harpy use their bounding box directly
+          if (player.x < enemy.x + enemy.w && player.x + player.width > enemy.x &&
+              player.y < enemy.y + enemy.h && player.y + player.height > enemy.y) {
+            isColliding = true;
+          }
+        }
+
+        if (isColliding) {
+          takeDamageRef.current(false, enemy.x + enemy.w / 2);
         }
       }
     });
@@ -631,16 +870,33 @@ export default function GamePage({ onExit }: GamePageProps) {
     // 6. Collectibles
     level.collectibles.forEach(c => drawCollectible(ctx, c, camera.x));
 
-    // 7. Enemies
+    // 6.5. Checkpoints
+    if (level.checkpoints) {
+      level.checkpoints.forEach(cp => drawCheckpoint(ctx, cp, camera.x));
+    }
+
+    // 7. Enemies (Draw by type)
     level.enemies.forEach(e => {
-      if (e.alive) drawSkeleton(ctx, e.x - camera.x, e.y, e.w, e.h, e.animFrame, e.speed);
+      if (!e.alive) return;
+      if (e.type === 'skeleton') {
+        drawSkeleton(ctx, e.x - camera.x, e.y, e.w, e.h, e.animFrame, e.speed);
+      } else if (e.type === 'harpy') {
+        drawHarpy(ctx, e.x - camera.x, e.y, e.w, e.h, e.animFrame, e.speed);
+      } else if (e.type === 'wall_lurker') {
+        drawWallLurker(ctx, e.x - camera.x, e.y, e.w, e.h, e.lurkerSide || 'left', e.lurkerExtend || 0);
+      }
     });
 
     // Bullets
     gameRef.current.bullets.forEach(b => drawBullet(ctx, b, camera.x));
 
-    // 8. Player
+    // 8. Player (Inject alpha flash for invincibility frames)
+    const isInvincibleFlashing = player.invincibleTimer > 0 && Math.floor(Date.now() / 80) % 2 === 0;
+    if (isInvincibleFlashing) {
+      ctx.globalAlpha = 0.3;
+    }
     drawPlayer(ctx, player, camera.x);
+    ctx.globalAlpha = 1;
 
     // 9. Lighting
     drawLighting(ctx, player.x - camera.x, player.y, player.direction, scaledW, scaledH, TORCH_RADIUS);
@@ -651,6 +907,24 @@ export default function GamePage({ onExit }: GamePageProps) {
   // ==============================
   // UI OVERLAYS
   // ==============================
+  const renderHearts = () => {
+    // Use playerHealth state (not the ref) so React re-renders when health changes
+    return (
+      <div style={{ display: 'flex', gap: '4px', marginTop: '6px' }}>
+        {[1, 2, 3].map(heart => (
+          <span key={heart} style={{
+            fontSize: '18px',
+            filter: heart <= playerHealth ? 'drop-shadow(0 0 4px rgba(255,68,68,0.7))' : 'none',
+            opacity: heart <= playerHealth ? 1 : 0.3,
+            transition: 'opacity 0.2s, filter 0.2s',
+          }}>
+            {heart <= playerHealth ? '❤️' : '🖤'}
+          </span>
+        ))}
+      </div>
+    );
+  };
+
   return (
     <div className="game-fullscreen" style={{ cursor: gameState === 'playing' ? 'none' : 'default' }}>
       <canvas ref={canvasRef} />
@@ -672,6 +946,7 @@ export default function GamePage({ onExit }: GamePageProps) {
               <div style={{ fontSize: '11px', color: '#f4e8d8', letterSpacing: '0.1em' }}>
                 ✦ {collected} collected | ⌖ {gameRef.current.player.bullets}/6 Bullets
               </div>
+              {renderHearts()}
             </div>
 
             {/* Dash cooldown indicator */}

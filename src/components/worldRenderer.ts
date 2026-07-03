@@ -606,6 +606,21 @@ export function drawCollectible(ctx: CanvasRenderingContext2D, item: Collectible
       ctx.fillRect(x + 6, y + 9, 4, 3);
       break;
 
+    case 'scroll':
+      ctx.shadowColor = '#d4cfc5';
+      ctx.shadowBlur = 10;
+      // Scroll roll (parchment)
+      ctx.fillStyle = '#f5f0e8';
+      ctx.fillRect(x + 2, y + 2, 12, 8);
+      // Ribbon tie
+      ctx.fillStyle = '#8b3a25';
+      ctx.fillRect(x + 7, y + 1, 2, 10);
+      // Wooden roller ends
+      ctx.fillStyle = '#5c3a21';
+      ctx.fillRect(x + 1, y + 2, 1, 8);
+      ctx.fillRect(x + 14, y + 2, 1, 8);
+      break;
+
     case 'ammo_refill':
       ctx.shadowColor = '#6b7c3e';
       ctx.fillStyle = '#3e4a2e';
@@ -794,3 +809,50 @@ export function drawLighting(
 
   ctx.drawImage(tempCanvas, 0, 0);
 }
+
+// ==============================
+// Checkpoint Drawing (Pillar of gold/blue flame)
+// ==============================
+export function drawCheckpoint(
+  ctx: CanvasRenderingContext2D,
+  checkpoint: { x: number; y: number; activated: boolean },
+  cameraX: number
+) {
+  const x = checkpoint.x - cameraX;
+  const y = checkpoint.y; // Base level where player stands
+
+  // Draw base stone pedestal
+  ctx.fillStyle = '#6b5a3a';
+  ctx.fillRect(x - 8, y + 26, 16, 12);
+  ctx.fillStyle = '#8b7a5a';
+  ctx.fillRect(x - 10, y + 24, 20, 3);
+  ctx.fillStyle = '#4a3d25';
+  ctx.fillRect(x - 8, y + 36, 16, 2);
+
+  // Flame / Beacon glow
+  const t = Date.now();
+  const flicker = Math.sin(t / 100) * 2;
+  const activated = checkpoint.activated;
+
+  // Beacon flame colors: bright cyan/blue if activated, soft amber if not
+  const colorOuter = activated ? 'rgba(0, 180, 255, 0.4)' : 'rgba(212, 168, 67, 0.3)';
+  const colorInner = activated ? '#80e0ff' : '#f0c84a';
+  const colorCore = activated ? '#ffffff' : '#fff4cc';
+  
+  // Outer glow aura
+  ctx.shadowBlur = activated ? 20 : 8;
+  ctx.shadowColor = activated ? '#00b4ff' : '#d4a843';
+
+  // Draw flame particles
+  ctx.fillStyle = colorOuter;
+  ctx.fillRect(x - 4 + flicker, y + 4, 8, 20);
+
+  ctx.fillStyle = colorInner;
+  ctx.fillRect(x - 2 + flicker * 0.5, y + 8, 4, 16);
+
+  ctx.fillStyle = colorCore;
+  ctx.fillRect(x - 1, y + 12, 2, 10);
+
+  ctx.shadowBlur = 0;
+}
+

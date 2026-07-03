@@ -14,7 +14,7 @@ export interface Entity {
 }
 
 // --- Animation Types ---
-export type AnimationState = 'idle' | 'walk' | 'jump_rise' | 'jump_fall' | 'dash';
+export type AnimationState = 'idle' | 'walk' | 'jump_rise' | 'jump_fall' | 'dash' | 'hurt';
 
 export interface SpriteFrame {
   duration: number; // ms per frame
@@ -46,6 +46,10 @@ export interface PlayerState {
   bullets: number;
   // Afterimages for dash trail
   afterimages: AfterImage[];
+  // Health
+  health: number;           // 0–3; reaching 0 means 'lost'
+  invincibleTimer: number;  // seconds of invincibility after damage hit
+  hurtTimer: number;        // controls hit animation and input lock
 }
 
 export interface AfterImage {
@@ -69,6 +73,13 @@ export interface Bullet {
 // --- Level Types ---
 export type LevelType = 'ruins' | 'underwater' | 'labyrinth' | 'underworld' | 'library';
 
+export interface Checkpoint {
+  id: string;
+  x: number;   // respawn X
+  y: number;   // respawn Y
+  activated: boolean;
+}
+
 export interface Level {
   id: number;
   name: string;
@@ -82,6 +93,7 @@ export interface Level {
   collectibles: Collectible[];
   doors: Door[];
   decorations: Decoration[];
+  checkpoints?: Checkpoint[];
 }
 
 export interface Platform {
@@ -117,7 +129,7 @@ export interface Collectible {
   id: string;
   x: number;
   y: number;
-  type: 'olive_branch' | 'golden_apple' | 'amphora' | 'golden_fleece' | 'ammo_refill' | 'journal';
+  type: 'olive_branch' | 'golden_apple' | 'amphora' | 'golden_fleece' | 'ammo_refill' | 'journal' | 'scroll';
   collected: boolean;
 }
 
@@ -127,6 +139,10 @@ export interface Decoration {
   type: 'pillar' | 'broken_pillar' | 'torch' | 'statue' | 'vines' | 'bones';
 }
 
+export type EnemyType = 'skeleton' | 'harpy' | 'wall_lurker';
+
+export type LurkerPhase = 'waiting' | 'extending' | 'holding' | 'retracting';
+
 export interface Enemy {
   x: number;
   y: number;
@@ -135,10 +151,17 @@ export interface Enemy {
   start: number;
   end: number;
   speed: number;
-  type: 'skeleton';
+  type: EnemyType;
   animFrame: number;
   animTimer: number;
   alive: boolean;
+  // Harpy-specific
+  flyOffset?: number;       // phase seed for sine-wave bob
+  // Wall Lurker-specific
+  lurkerSide?: 'left' | 'right' | 'ceiling'; // which wall/ceiling it protrudes from
+  lurkerPhase?: LurkerPhase;
+  lurkerTimer?: number;     // counts time in current phase
+  lurkerExtend?: number;    // current extension in px (0..w)
 }
 
 export type Rect = {
