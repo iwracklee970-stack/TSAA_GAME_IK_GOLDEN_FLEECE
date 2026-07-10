@@ -44,6 +44,10 @@ export interface PlayerState {
   jumpReleased: boolean;
   // Revolver
   bullets: number;
+  hasGun?: boolean;
+  isClimbing?: boolean;
+  floatingHintText?: string;
+  floatingHintTimer?: number;
   // Afterimages for dash trail
   afterimages: AfterImage[];
   // Health
@@ -80,6 +84,23 @@ export interface Checkpoint {
   activated: boolean;
 }
 
+export interface Ladder {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+export interface NPC {
+  id: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  name: string;
+  dialogue: string[];
+}
+
 export interface Level {
   id: number;
   name: string;
@@ -94,6 +115,8 @@ export interface Level {
   doors: Door[];
   decorations: Decoration[];
   checkpoints?: Checkpoint[];
+  ladders?: Ladder[];
+  npcs?: NPC[];
 }
 
 export interface Platform {
@@ -129,7 +152,7 @@ export interface Collectible {
   id: string;
   x: number;
   y: number;
-  type: 'olive_branch' | 'golden_apple' | 'amphora' | 'golden_fleece' | 'ammo_refill' | 'journal' | 'scroll';
+  type: 'olive_branch' | 'golden_apple' | 'amphora' | 'golden_fleece' | 'ammo_refill' | 'journal' | 'scroll' | 'gun';
   collected: boolean;
 }
 

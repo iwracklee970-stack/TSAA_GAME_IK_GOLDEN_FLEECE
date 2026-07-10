@@ -11,49 +11,103 @@ export const LEVELS: Level[] = [
     name: 'Tbilisi Archives, 1938',
     type: 'library',
     entrance: { x: 60, y: 350 },
-    exit: { x: 870, y: 350 },
+    exit: { x: 920, y: 210 },
     platforms: [
       // Continuous ground floor (no pits)
-      { x: -100, y: 430, w: 1100, h: 100, style: 'stone' },
-      // ── PUZZLE 1: Bookshelf Hop ──
-      // Low shelf the player must jump onto then off
-      { x: 240, y: 380, w: 100, h: 20, style: 'moss' },
-      // ── Elevated scroll shelf (teaches double-jump / dash) ──
-      { x: 440, y: 310, w: 80, h: 14, style: 'moss' },
-      // Desk area — slightly raised step
-      { x: 700, y: 400, w: 120, h: 30, style: 'stone' },
+      { x: -100, y: 430, w: 1200, h: 100, style: 'stone' },
+      
+      // Dividing vertical wall separating left and right sections
+      { x: 350, y: 0, w: 20, h: 350, style: 'stone' },
+
+      // Left-side platforms (for puzzle climbing)
+      { x: 20, y: 330, w: 100, h: 15, style: 'stone' },   // Platform L1
+      { x: 180, y: 270, w: 100, h: 15, style: 'stone' },  // Platform L2
+      { x: 20, y: 210, w: 100, h: 15, style: 'stone' },   // Platform L3
+      { x: 60, y: 120, w: 290, h: 15, style: 'stone' },   // Platform L4 (top platform)
+
+      // Right-side table for gun and book
+      { x: 420, y: 395, w: 120, h: 35, style: 'stone' },
+
+      // Stairway leading up to the exit portal
+      { x: 580, y: 410, w: 40, h: 20, style: 'stone' },
+      { x: 620, y: 390, w: 40, h: 40, style: 'stone' },
+      { x: 660, y: 370, w: 40, h: 60, style: 'stone' },
+      { x: 700, y: 350, w: 40, h: 80, style: 'stone' },
+      { x: 740, y: 330, w: 40, h: 100, style: 'stone' },
+      { x: 780, y: 310, w: 40, h: 120, style: 'stone' },
+      { x: 820, y: 290, w: 180, h: 140, style: 'stone' }, // Landing platform
     ],
     triggers: [
       {
         id: 'exit_0',
-        rect: { x: 870, y: 370, w: 50, h: 80 },
+        rect: { x: 920, y: 210, w: 50, h: 80 },
         type: 'exit',
         activated: false,
+      },
+      {
+        id: 'lever_0',
+        rect: { x: 310, y: 80, w: 30, h: 40 },
+        type: 'lever',
+        activated: false,
+        linkedDoorId: 'door_0',
+        persistent: true,
       },
     ],
     doors: [
       {
         id: 'door_0',
-        x: 820,
+        x: 350,
         y: 350,
-        w: 40,
+        w: 20,
         h: 80,
-        open: false, // Opened when journey starts via book UI
+        open: false,
         openProgress: 0,
+        color: '#2563eb', // Blue locked door — opened by lever
+      },
+      {
+        id: 'exit_door_0',
+        x: 920,
+        y: 210,
+        w: 50,
+        h: 80,
+        open: false,
+        openProgress: 0,
+        color: '#d4a843', // Yellow progression door — opened by journal/book
       },
     ],
     enemies: [],
     collectibles: [
-      // Scroll on elevated shelf — lore + hints
-      { id: 'scroll_lib', x: 452, y: 282, type: 'scroll', collected: false },
-      // Journal on desk — triggers the book overlay
-      { id: 'journal_0', x: 740, y: 370, type: 'journal', collected: false },
+      { id: 'gun_pickup',  x: 470, y: 365, type: 'gun',     collected: false },
+      { id: 'journal_0',  x: 430, y: 365, type: 'journal',  collected: false },
     ],
     decorations: [
       { x: 80,  y: 390, type: 'torch' },
-      { x: 350, y: 390, type: 'torch' },
+      { x: 300, y: 390, type: 'torch' },
       { x: 600, y: 390, type: 'torch' },
       { x: 820, y: 390, type: 'torch' },
+    ],
+    ladders: [
+      { x: 80, y: 120, w: 24, h: 90 }, // Connects Platform L3 to L4
+    ],
+    npcs: [
+      {
+        id: 'librarian',
+        x: 230,
+        y: 382,
+        w: 24,
+        h: 48,
+        name: 'Head Librarian',
+        dialogue: [
+          "Greetings, traveler! Welcome to the Tbilisi Archives.",
+          "To survive your expedition, you must master basic movement.",
+          "Use A and D (or Arrow Keys) to run left and right.",
+          "Press SPACE to jump, and press it again in mid-air to Double Jump!",
+          "To climb ladders, stand near them and hold W to go up (or S to descend).",
+          "The corridor to the right is locked. Climb up the left platforms to flip the lever at the top.",
+          "You must retrieve the expedition Revolver from the table before leaving!",
+          "Use the E key to flip levers, talk, and pick up items."
+        ]
+      }
     ],
     backgrounds: ['#1e140d', '#2c1e13', '#3d2b1a'],
   },
@@ -94,7 +148,17 @@ export const LEVELS: Level[] = [
         activated: false,
       },
     ],
-    doors: [],
+    doors: [
+      {
+        id: 'door_1',
+        x: 2400,
+        y: 320,
+        w: 50,
+        h: 80,
+        open: false,
+        openProgress: 0,
+      },
+    ],
     enemies: [
       { x: 1500, y: 368, w: 28, h: 32, start: 1420, end: 1750, speed: 70, type: 'skeleton', animFrame: 0, animTimer: 0, alive: true },
       { x: 1950, y: 220, w: 28, h: 24, start: 1850, end: 2100, speed: 80, type: 'harpy', animFrame: 0, animTimer: 0, alive: true, flyOffset: 0.5 },
@@ -153,7 +217,17 @@ export const LEVELS: Level[] = [
         activated: false,
       },
     ],
-    doors: [],
+    doors: [
+      {
+        id: 'door_2',
+        x: 2600,
+        y: 340,
+        w: 50,
+        h: 80,
+        open: false,
+        openProgress: 0,
+      },
+    ],
     enemies: [
       // Ground skeleton patrol
       { x: 1700, y: 388, w: 28, h: 32, start: 1660, end: 2100, speed: 80, type: 'skeleton', animFrame: 0, animTimer: 0, alive: true },
@@ -219,7 +293,17 @@ export const LEVELS: Level[] = [
         activated: false,
       },
     ],
-    doors: [],
+    doors: [
+      {
+        id: 'door_3',
+        x: 2800,
+        y: 320,
+        w: 50,
+        h: 80,
+        open: false,
+        openProgress: 0,
+      },
+    ],
     enemies: [
       // Ground skeletons
       { x: 600, y: 368, w: 28, h: 32, start: 510, end: 780, speed: 90, type: 'skeleton', animFrame: 0, animTimer: 0, alive: true },
@@ -297,7 +381,17 @@ export const LEVELS: Level[] = [
         activated: false,
       },
     ],
-    doors: [],
+    doors: [
+      {
+        id: 'door_4',
+        x: 3200,
+        y: 320,
+        w: 50,
+        h: 80,
+        open: false,
+        openProgress: 0,
+      },
+    ],
     enemies: [
       // Ground skeletons
       { x: 1200, y: 368, w: 28, h: 32, start: 1130, end: 1400, speed: 100, type: 'skeleton', animFrame: 0, animTimer: 0, alive: true },

@@ -1,11 +1,12 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { useGameLoop } from '../hooks/useGameLoop';
-import { PlayerState, Level, AfterImage, Bullet } from '../types';
+import { PlayerState, Level, AfterImage, Bullet, NPC } from '../types';
 import { LEVELS } from '../levels';
 import { drawPlayer, drawSkeleton, drawBullet, drawHarpy, drawWallLurker } from './sprites';
 import {
   drawBackground, drawPlatform, drawDoor, drawTrigger,
-  drawCollectible, drawDecoration, drawLighting, drawCheckpoint
+  drawCollectible, drawDecoration, drawLighting, drawCheckpoint,
+  drawLadder, drawNPCLibrarian, drawInteractionTooltip, drawFloatingTextHint
 } from './worldRenderer';
 
 // ==============================
@@ -101,7 +102,11 @@ function createPlayer(level: Level): PlayerState {
     dashInvincible: false,
     hasDoubleJumped: false,
     jumpReleased: true,
-    bullets: 6,
+    bullets: level.id > 0 ? 6 : 0,
+    hasGun: level.id > 0,
+    isClimbing: false,
+    floatingHintText: '',
+    floatingHintTimer: 0,
     afterimages: [],
     health: 3,
     invincibleTimer: 0,
@@ -123,6 +128,10 @@ export default function GamePage({ onExit }: GamePageProps) {
   const [bookOpen, setBookOpen] = useState(false);
   const [bookPage, setBookPage] = useState(1);
   const [transitioning, setTransitioning] = useState(false);
+  const [dialogueNpc, setDialogueNpc] = useState<NPC | null>(null);
+  const [dialogueIndex, setDialogueIndex] = useState(0);
+  // Screen-space position of the NPC when dialogue is opened (for floating box)
+  const dialogueScreenPos = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
 
   // Ref for levelIndex so the game loop always sees the current value
   const levelIndexRef = useRef(0);
@@ -134,6 +143,15 @@ export default function GamePage({ onExit }: GamePageProps) {
     libFar: HTMLImageElement | HTMLCanvasElement | null;
     libMid: HTMLImageElement | HTMLCanvasElement | null;
     libFore: HTMLImageElement | HTMLCanvasElement | null;
+    underwaterFar: HTMLImageElement | HTMLCanvasElement | null;
+    underwaterMid: HTMLImageElement | HTMLCanvasElement | null;
+    underwaterFore: HTMLImageElement | HTMLCanvasElement | null;
+    labyrinthFar: HTMLImageElement | HTMLCanvasElement | null;
+    labyrinthMid: HTMLImageElement | HTMLCanvasElement | null;
+    labyrinthFore: HTMLImageElement | HTMLCanvasElement | null;
+    underworldFar: HTMLImageElement | HTMLCanvasElement | null;
+    underworldMid: HTMLImageElement | HTMLCanvasElement | null;
+    underworldFore: HTMLImageElement | HTMLCanvasElement | null;
   }>({
     far: null,
     mid: null,
@@ -141,6 +159,15 @@ export default function GamePage({ onExit }: GamePageProps) {
     libFar: null,
     libMid: null,
     libFore: null,
+    underwaterFar: null,
+    underwaterMid: null,
+    underwaterFore: null,
+    labyrinthFar: null,
+    labyrinthMid: null,
+    labyrinthFore: null,
+    underworldFar: null,
+    underworldMid: null,
+    underworldFore: null,
   });
 
   const gameRef = useRef({
@@ -166,13 +193,35 @@ export default function GamePage({ onExit }: GamePageProps) {
     setShowHint('Walk to the glowing journal on the desk and pick it up');
     gameRef.current.hintTimer = 6;
 
+    const baseUrl = import.meta.env.BASE_URL;
+
     // Standard ruins backgrounds
     const farImg = new Image();
-    const baseUrl = import.meta.env.BASE_URL;
     farImg.src = baseUrl + 'bg_far.png';
     farImg.onload = () => { bgImagesRef.current.far = farImg; };
     processChromaKey(baseUrl + 'bg_mid.png', '#ffffff').then((canvas) => { bgImagesRef.current.mid = canvas; });
     processChromaKey(baseUrl + 'bg_fore.png', '#ffffff').then((canvas) => { bgImagesRef.current.fore = canvas; });
+
+    // Underwater backgrounds
+    const uwFarImg = new Image();
+    uwFarImg.src = baseUrl + 'underwater_far.png';
+    uwFarImg.onload = () => { bgImagesRef.current.underwaterFar = uwFarImg; };
+    processChromaKey(baseUrl + 'underwater_mid.png', '#ffffff').then((canvas) => { bgImagesRef.current.underwaterMid = canvas; });
+    processChromaKey(baseUrl + 'underwater_fore.png', '#ffffff').then((canvas) => { bgImagesRef.current.underwaterFore = canvas; });
+
+    // Labyrinth backgrounds
+    const labFarImg = new Image();
+    labFarImg.src = baseUrl + 'labyrinth_far.png';
+    labFarImg.onload = () => { bgImagesRef.current.labyrinthFar = labFarImg; };
+    processChromaKey(baseUrl + 'labyrinth_mid.png', '#ffffff').then((canvas) => { bgImagesRef.current.labyrinthMid = canvas; });
+    processChromaKey(baseUrl + 'labyrinth_fore.png', '#ffffff').then((canvas) => { bgImagesRef.current.labyrinthFore = canvas; });
+
+    // Underworld backgrounds
+    const uwlFarImg = new Image();
+    uwlFarImg.src = baseUrl + 'underworld_far.png';
+    uwlFarImg.onload = () => { bgImagesRef.current.underworldFar = uwlFarImg; };
+    processChromaKey(baseUrl + 'underworld_mid.png', '#ffffff').then((canvas) => { bgImagesRef.current.underworldMid = canvas; });
+    processChromaKey(baseUrl + 'underworld_fore.png', '#ffffff').then((canvas) => { bgImagesRef.current.underworldFore = canvas; });
   }, []);
 
   // Split reset into full/hard reset or soft checkpoint reload
@@ -284,6 +333,26 @@ export default function GamePage({ onExit }: GamePageProps) {
     };
   }, [onExit]);
 
+  // E key advances / closes dialogue while dialogue box is open
+  useEffect(() => {
+    if (!dialogueNpc) return;
+    const handleDialogueKey = (e: KeyboardEvent) => {
+      if (e.code === 'KeyE') {
+        e.preventDefault();
+        setDialogueIndex(i => {
+          if (i < dialogueNpc.dialogue.length - 1) {
+            return i + 1; // advance to next line
+          } else {
+            setDialogueNpc(null); // last line — close
+            return 0;
+          }
+        });
+      }
+    };
+    window.addEventListener('keydown', handleDialogueKey);
+    return () => window.removeEventListener('keydown', handleDialogueKey);
+  }, [dialogueNpc]);
+
   // Resize canvas
   useEffect(() => {
     const resize = () => {
@@ -301,7 +370,7 @@ export default function GamePage({ onExit }: GamePageProps) {
   // GAME LOOP
   // ==============================
   useGameLoop((dt) => {
-    if (gameState !== 'playing' || bookOpen || transitioning) return;
+    if (gameState !== 'playing' || bookOpen || transitioning || dialogueNpc) return;
     const { player, keys, level, camera, bullets } = gameRef.current;
     if (!level) return;
 
@@ -312,6 +381,15 @@ export default function GamePage({ onExit }: GamePageProps) {
     if (gameRef.current.hintTimer > 0) {
       gameRef.current.hintTimer -= dt;
       if (gameRef.current.hintTimer <= 0) setShowHint('');
+    }
+
+    // --- Floating hint timer ---
+    if (player.floatingHintTimer && player.floatingHintTimer > 0) {
+      player.floatingHintTimer -= dt;
+      if (player.floatingHintTimer <= 0) {
+        player.floatingHintTimer = 0;
+        player.floatingHintText = '';
+      }
     }
 
     if (gameRef.current.shootCooldown > 0) gameRef.current.shootCooldown -= dt;
@@ -388,68 +466,104 @@ export default function GamePage({ onExit }: GamePageProps) {
       // Controls locked. Just apply gravity
       player.vy += GRAVITY * dt;
     } else {
-      // --- Normal Movement ---
-      const BASE_SPEED = 120; // Starts slow for micro-movements
-      const ACCEL = 400;      // Ramps up gradually
-      const MAX_SPEED = 320;  // Capped speed to prevent zooming past platforms
-
-      if (keys['ArrowLeft'] || keys['KeyA']) {
-        if (player.vx > 0) player.vx *= 0.5; // Responsive snappy turn
-        if (player.vx > -BASE_SPEED) {
-          player.vx = -BASE_SPEED;
-        } else {
-          player.vx -= ACCEL * dt;
+      // --- Check ladder overlap ---
+      let onLadder = false;
+      if (level.ladders) {
+        for (const ladder of level.ladders) {
+          const overlapX = player.x + player.width > ladder.x && player.x < ladder.x + ladder.w;
+          const overlapY = player.y + player.height > ladder.y && player.y < ladder.y + ladder.h;
+          if (overlapX && overlapY) {
+            onLadder = true;
+            break;
+          }
         }
-        if (player.vx < -MAX_SPEED) player.vx = -MAX_SPEED;
-        player.direction = -1;
       }
-      if (keys['ArrowRight'] || keys['KeyD']) {
-        if (player.vx < 0) player.vx *= 0.5; // Responsive snappy turn
-        if (player.vx < BASE_SPEED) {
-          player.vx = BASE_SPEED;
-        } else {
-          player.vx += ACCEL * dt;
+
+      if (onLadder && (keys['KeyW'] || keys['ArrowUp'] || keys['KeyS'] || keys['ArrowDown'])) {
+        // --- Ladder Climbing ---
+        player.isClimbing = true;
+        player.vy = 0;
+        player.vx *= 0.85; // friction on ladder
+        const CLIMB_SPEED = 140;
+        if (keys['KeyW'] || keys['ArrowUp']) {
+          player.vy = -CLIMB_SPEED;
+        } else if (keys['KeyS'] || keys['ArrowDown']) {
+          player.vy = CLIMB_SPEED;
         }
-        if (player.vx > MAX_SPEED) player.vx = MAX_SPEED;
-        player.direction = 1;
-      }
-
-      // Jump & Double Jump
-      const jumpKeyPressed = keys['ArrowUp'] || keys['Space'] || keys['KeyW'];
-      if (!jumpKeyPressed) {
-        player.jumpReleased = true;
-      }
-
-      if (jumpKeyPressed) {
-        if (player.grounded) {
+        // Allow jumping off ladder
+        if (keys['Space'] && player.jumpReleased) {
+          player.isClimbing = false;
           player.vy = JUMP_FORCE;
-          player.grounded = false;
+          player.jumpReleased = false;
           player.hasDoubleJumped = false;
-          player.jumpReleased = false;
           player.canAirDash = true;
-        } else if (player.jumpReleased && !player.hasDoubleJumped) {
-          player.vy = JUMP_FORCE;
-          player.hasDoubleJumped = true;
-          player.jumpReleased = false;
         }
-      }
+      } else {
+        player.isClimbing = false;
 
-      // Dash trigger (L key)
-      if (keys['KeyL'] && player.dashCooldown <= 0) {
-        const canDash = player.grounded || player.canAirDash;
-        if (canDash) {
-          player.isDashing = true;
-          player.dashTimer = DASH_DURATION;
-          player.dashCooldown = DASH_COOLDOWN;
-          player.dashInvincible = true;
-          if (!player.grounded) player.canAirDash = false;
-          player.afterimages = [];
-          keys['KeyL'] = false;
+        // --- Normal Movement ---
+        const BASE_SPEED = 120; // Starts slow for micro-movements
+        const ACCEL = 400;      // Ramps up gradually
+        const MAX_SPEED = 320;  // Capped speed to prevent zooming past platforms
+
+        if (keys['ArrowLeft'] || keys['KeyA']) {
+          if (player.vx > 0) player.vx *= 0.5;
+          if (player.vx > -BASE_SPEED) {
+            player.vx = -BASE_SPEED;
+          } else {
+            player.vx -= ACCEL * dt;
+          }
+          if (player.vx < -MAX_SPEED) player.vx = -MAX_SPEED;
+          player.direction = -1;
         }
-      }
+        if (keys['ArrowRight'] || keys['KeyD']) {
+          if (player.vx < 0) player.vx *= 0.5;
+          if (player.vx < BASE_SPEED) {
+            player.vx = BASE_SPEED;
+          } else {
+            player.vx += ACCEL * dt;
+          }
+          if (player.vx > MAX_SPEED) player.vx = MAX_SPEED;
+          player.direction = 1;
+        }
 
-      // Gravity
-      player.vy += GRAVITY * dt;
+        // Jump & Double Jump
+        const jumpKeyPressed = keys['ArrowUp'] || keys['Space'] || keys['KeyW'];
+        if (!jumpKeyPressed) {
+          player.jumpReleased = true;
+        }
+
+        if (jumpKeyPressed) {
+          if (player.grounded) {
+            player.vy = JUMP_FORCE;
+            player.grounded = false;
+            player.hasDoubleJumped = false;
+            player.jumpReleased = false;
+            player.canAirDash = true;
+          } else if (player.jumpReleased && !player.hasDoubleJumped) {
+            player.vy = JUMP_FORCE;
+            player.hasDoubleJumped = true;
+            player.jumpReleased = false;
+          }
+        }
+
+        // Dash trigger (L key)
+        if (keys['KeyL'] && player.dashCooldown <= 0) {
+          const canDash = player.grounded || player.canAirDash;
+          if (canDash) {
+            player.isDashing = true;
+            player.dashTimer = DASH_DURATION;
+            player.dashCooldown = DASH_COOLDOWN;
+            player.dashInvincible = true;
+            if (!player.grounded) player.canAirDash = false;
+            player.afterimages = [];
+            keys['KeyL'] = false;
+          }
+        }
+
+        // Gravity (not applied while climbing)
+        player.vy += GRAVITY * dt;
+      }
     }
 
     // Friction
@@ -511,11 +625,26 @@ export default function GamePage({ onExit }: GamePageProps) {
     // --- Platform collision ---
     player.grounded = false;
 
-    // Door collision (closed doors act as platforms)
+    // When climbing a ladder, platforms that the ladder passes through should not block the player
+    const ladderXRanges = (level.ladders || []).map(l => ({ x: l.x, right: l.x + l.w }));
+    const isPlatformBlockingLadder = (px: number, pw: number) =>
+      player.isClimbing && ladderXRanges.some(l => px < l.right && px + pw > l.x);
+
+    // Door collision (closed doors act as solid walls)
     const allSolids = [
-      ...level.platforms.map(p => ({ x: p.x, y: p.y, w: p.w, h: p.h })),
+      ...level.platforms
+        .filter(p => !isPlatformBlockingLadder(p.x, p.w))
+        .map(p => ({ x: p.x, y: p.y, w: p.w, h: p.h })),
       ...level.doors.filter(d => {
-        // Only solid if it's not open AND the player is not currently inside it (failsafe door safety)
+        // Locked doors (like the blue door_0 in Level 0) are ALWAYS solid when closed.
+        // They must never apply the playerInDoor bypass — player cannot phase through.
+        const isLockedDoor = level.id === 0 && d.id === 'door_0';
+        if (isLockedDoor) {
+          // Solid as long as it's not fully open
+          return d.openProgress < 0.9;
+        }
+        // For sliding exit doors: skip collision if player is already inside
+        // (prevents them from getting trapped when a door closes behind them)
         const playerInDoor = player.x < d.x + d.w && player.x + player.width > d.x &&
                              player.y < d.y + d.h && player.y + player.height > d.y;
         return (!d.open || d.openProgress < 0.9) && !playerInDoor;
@@ -585,13 +714,8 @@ export default function GamePage({ onExit }: GamePageProps) {
         }
       }
 
-      if (trigger.type === 'lever' && touching && !trigger.activated) {
-        trigger.activated = true;
-        const door = level.doors.find(d => d.id === trigger.linkedDoorId);
-        if (door) door.open = true;
-        setShowHint('Lever activated!');
-        gameRef.current.hintTimer = 2;
-      }
+      // Lever is now E-key activated, not auto-touch
+      // (handled below in E-key interaction block)
 
       if (trigger.type === 'exit' && touching && !trigger.activated) {
         // Block exit in library until journey is started
@@ -600,6 +724,21 @@ export default function GamePage({ onExit }: GamePageProps) {
           gameRef.current.hintTimer = 2;
           return;
         }
+
+        // Block exit in level 0 until gun has been picked up
+        if (level.id === 0 && !player.hasGun) {
+          player.floatingHintText = "I need my gun first!";
+          player.floatingHintTimer = 4.0;
+          return;
+        }
+
+        // Find the door at this exact exit spot
+        const linkedDoor = level.doors.find(d => d.x === trigger.rect.x && d.y === trigger.rect.y);
+        // Only trigger transition if the door is fully open
+        if (linkedDoor && linkedDoor.openProgress < 0.95) {
+          return;
+        }
+
         trigger.activated = true;
         setTransitioning(true);
         setTimeout(() => {
@@ -624,7 +763,14 @@ export default function GamePage({ onExit }: GamePageProps) {
       const playerInDoor = player.x < door.x + door.w && player.x + player.width > door.x &&
                            player.y < door.y + door.h && player.y + player.height > door.y;
       
-      const shouldOpen = door.open || playerInDoor;
+      // The blue locked door (door_0 on level 0) only opens via lever — not proximity
+      const isLockedDoor = level.id === 0 && door.id === 'door_0';
+      
+      // Exit doors on non-level-0 levels open by proximity; library door requires journey started
+      const isExitDoor = door.id.startsWith('door_') && !isLockedDoor;
+      const playerNear = isExitDoor && (level.type !== 'library' || gameRef.current.journeyStarted) && Math.abs(player.x - door.x) < 100;
+      
+      const shouldOpen = door.open || playerInDoor || (!isLockedDoor && playerNear);
 
       if (shouldOpen && door.openProgress < 1) {
         door.openProgress = Math.min(1, door.openProgress + dt * 2.5);
@@ -651,9 +797,66 @@ export default function GamePage({ onExit }: GamePageProps) {
       });
     }
 
-    // --- Collectibles ---
+    // --- E-Key Interactions ---
+    if (keys['KeyE']) {
+      keys['KeyE'] = false; // consume the key press
+
+      // Talk to NPC
+      if (level.npcs) {
+        for (const npc of level.npcs) {
+          const dist = Math.abs(player.x - npc.x);
+          if (dist < 60 && Math.abs(player.y - npc.y) < 60) {
+            // Compute NPC screen position for the floating dialogue box
+            const cvs = canvasRef.current;
+            if (cvs) {
+              const scale = cvs.height / 520;
+              const screenX = (npc.x + npc.w / 2 - camera.x) * scale;
+              const screenY = (npc.y) * scale;
+              dialogueScreenPos.current = { x: screenX, y: screenY };
+            }
+            setDialogueNpc(npc);
+            setDialogueIndex(0);
+            break;
+          }
+        }
+      }
+
+      // Flip lever
+      level.triggers.forEach(trigger => {
+        if (trigger.type === 'lever' && !trigger.activated) {
+          const touching = player.x < trigger.rect.x + trigger.rect.w &&
+                           player.x + player.width > trigger.rect.x &&
+                           player.y < trigger.rect.y + trigger.rect.h &&
+                           player.y + player.height > trigger.rect.y;
+          if (touching) {
+            trigger.activated = true;
+            const door = level.doors.find(d => d.id === trigger.linkedDoorId);
+            if (door) door.open = true;
+            setShowHint('Lever flipped! The door opens...');
+            gameRef.current.hintTimer = 2;
+          }
+        }
+      });
+
+      // Pick up gun (E-key only)
+      level.collectibles.forEach(item => {
+        if (item.type === 'gun' && !item.collected) {
+          const dist = Math.hypot(player.x - item.x, player.y - item.y);
+          if (dist < 60) {
+            item.collected = true;
+            player.hasGun = true;
+            player.bullets = 6;
+            setShowHint('Revolver acquired! Press J to shoot.');
+            gameRef.current.hintTimer = 3;
+          }
+        }
+      });
+    }
+
+    // --- Collectibles (auto-collect for non-gun items) ---
     level.collectibles.forEach(item => {
       if (item.collected) return;
+      if (item.type === 'gun') return; // gun is E-key only
       const dist = Math.hypot(player.x - item.x, player.y - item.y);
       if (dist < 30) {
         item.collected = true;
@@ -849,6 +1052,12 @@ export default function GamePage({ onExit }: GamePageProps) {
     // 1. Background
     const bgSet = level.type === 'library' 
       ? { far: bgImagesRef.current.libFar, mid: bgImagesRef.current.libMid, fore: bgImagesRef.current.libFore }
+      : level.type === 'underwater'
+      ? { far: bgImagesRef.current.underwaterFar, mid: bgImagesRef.current.underwaterMid, fore: bgImagesRef.current.underwaterFore }
+      : level.type === 'labyrinth'
+      ? { far: bgImagesRef.current.labyrinthFar, mid: bgImagesRef.current.labyrinthMid, fore: bgImagesRef.current.labyrinthFore }
+      : level.type === 'underworld'
+      ? { far: bgImagesRef.current.underworldFar, mid: bgImagesRef.current.underworldMid, fore: bgImagesRef.current.underworldFore }
       : { far: bgImagesRef.current.far, mid: bgImagesRef.current.mid, fore: bgImagesRef.current.fore };
 
     drawBackground(ctx, level, camera.x, scaledW, scaledH, bgSet);
@@ -859,13 +1068,18 @@ export default function GamePage({ onExit }: GamePageProps) {
     // 3. Platforms
     level.platforms.forEach(p => drawPlatform(ctx, p, camera.x));
 
-    // 4. Doors
-    level.doors.forEach(d => drawDoor(ctx, d, camera.x));
+    // 3.5. Ladders
+    if (level.ladders) {
+      level.ladders.forEach(l => drawLadder(ctx, l, camera.x));
+    }
 
-    // 5. Triggers
+    // 4. Triggers
     level.triggers.forEach(t => {
       if (t.type !== 'exit' || !t.activated) drawTrigger(ctx, t, camera.x);
     });
+
+    // 5. Doors
+    level.doors.forEach(d => drawDoor(ctx, d, camera.x));
 
     // 6. Collectibles
     level.collectibles.forEach(c => drawCollectible(ctx, c, camera.x));
@@ -873,6 +1087,11 @@ export default function GamePage({ onExit }: GamePageProps) {
     // 6.5. Checkpoints
     if (level.checkpoints) {
       level.checkpoints.forEach(cp => drawCheckpoint(ctx, cp, camera.x));
+    }
+
+    // 6.6. NPCs
+    if (level.npcs) {
+      level.npcs.forEach(n => drawNPCLibrarian(ctx, n, camera.x));
     }
 
     // 7. Enemies (Draw by type)
@@ -897,6 +1116,54 @@ export default function GamePage({ onExit }: GamePageProps) {
     }
     drawPlayer(ctx, player, camera.x);
     ctx.globalAlpha = 1;
+
+    // 8.5. Floating Text Hint above Player
+    if (player.floatingHintText && player.floatingHintTimer && player.floatingHintTimer > 0) {
+      drawFloatingTextHint(ctx, player.x + player.width / 2 - camera.x, player.y, player.floatingHintText);
+    }
+
+    // 8.6. Interaction Tooltips
+    let promptText: string | null = null;
+    let promptX = 0;
+    let promptY = 0;
+
+    if (level.npcs) {
+      level.npcs.forEach(n => {
+        const dist = Math.abs(player.x - n.x);
+        if (dist < 60 && Math.abs(player.y - n.y) < 60) {
+          promptText = "[E] Speak";
+          promptX = n.x + n.w / 2;
+          promptY = n.y;
+        }
+      });
+    }
+
+    level.triggers.forEach(t => {
+      if (t.type === 'lever' && !t.activated) {
+        const touching = player.x < t.rect.x + t.rect.w && player.x + player.width > t.rect.x &&
+                         player.y < t.rect.y + t.rect.h && player.y + player.height > t.rect.y;
+        if (touching) {
+          promptText = "[E] Flip";
+          promptX = t.rect.x + t.rect.w / 2;
+          promptY = t.rect.y;
+        }
+      }
+    });
+
+    level.collectibles.forEach(c => {
+      if (c.type === 'gun' && !c.collected) {
+        const dist = Math.abs(player.x - c.x);
+        if (dist < 50 && Math.abs(player.y - c.y) < 50) {
+          promptText = "[E] Take";
+          promptX = c.x + 8;
+          promptY = c.y;
+        }
+      }
+    });
+
+    if (promptText) {
+      drawInteractionTooltip(ctx, promptX - camera.x, promptY, promptText);
+    }
 
     // 9. Lighting
     drawLighting(ctx, player.x - camera.x, player.y, player.direction, scaledW, scaledH, TORCH_RADIUS);
@@ -926,7 +1193,7 @@ export default function GamePage({ onExit }: GamePageProps) {
   };
 
   return (
-    <div className="game-fullscreen" style={{ cursor: gameState === 'playing' ? 'none' : 'default' }}>
+    <div className="game-fullscreen" style={{ cursor: (gameState === 'playing' && !bookOpen && !dialogueNpc) ? 'none' : 'default' }}>
       <canvas ref={canvasRef} />
 
       {/* HUD */}
@@ -1000,6 +1267,128 @@ export default function GamePage({ onExit }: GamePageProps) {
           </div>
         </div>
       )}
+
+      {/* NPC DIALOGUE — floating box above NPC, no screen dim */}
+      {dialogueNpc && (() => {
+        const BOX_W = 380;
+        const cvs = canvasRef.current;
+        const vw = cvs ? cvs.width  : window.innerWidth;
+        const vh = cvs ? cvs.height : window.innerHeight;
+
+        // Clamp so box never leaves the viewport
+        let left = dialogueScreenPos.current.x - BOX_W / 2;
+        let top  = dialogueScreenPos.current.y - 220; // above NPC head
+        left = Math.max(8, Math.min(left, vw - BOX_W - 8));
+        top  = Math.max(8, top);
+
+        return (
+          <div style={{
+            position: 'absolute',
+            left: `${left}px`,
+            top:  `${top}px`,
+            width: `${BOX_W}px`,
+            background: 'linear-gradient(160deg, #1e1208 0%, #100a03 100%)',
+            border: '2px solid #8b6914',
+            boxShadow: '0 4px 32px rgba(0,0,0,0.85), 0 0 16px rgba(212,168,67,0.15)',
+            padding: '16px 20px 14px',
+            zIndex: 9999,
+            pointerEvents: 'auto',
+          }}>
+            {/* Corner ornaments */}
+            {(['tl','tr','bl','br'] as const).map(pos => (
+              <div key={pos} style={{
+                position: 'absolute',
+                width: '12px', height: '12px',
+                borderColor: '#8b6914', borderStyle: 'solid', borderWidth: 0,
+                borderTopWidth:    pos.startsWith('t') ? '1px' : 0,
+                borderBottomWidth: pos.startsWith('b') ? '1px' : 0,
+                borderLeftWidth:   pos.endsWith('l')   ? '1px' : 0,
+                borderRightWidth:  pos.endsWith('r')   ? '1px' : 0,
+                top:    pos.startsWith('t') ? '5px' : 'auto',
+                bottom: pos.startsWith('b') ? '5px' : 'auto',
+                left:   pos.endsWith('l')   ? '5px' : 'auto',
+                right:  pos.endsWith('r')   ? '5px' : 'auto',
+              }} />
+            ))}
+
+            {/* Speaker name */}
+            <div style={{
+              fontFamily: '"Cinzel", serif',
+              fontSize: '9px',
+              color: '#d4a843',
+              letterSpacing: '0.2em',
+              textTransform: 'uppercase',
+              marginBottom: '8px',
+              borderBottom: '1px solid rgba(212,168,67,0.2)',
+              paddingBottom: '7px',
+            }}>
+              ✦ {dialogueNpc.name}
+            </div>
+
+            {/* Dialogue text */}
+            <div style={{
+              fontFamily: '"Crimson Text", "Georgia", serif',
+              fontSize: '14px',
+              color: '#f4e8d8',
+              lineHeight: 1.6,
+              minHeight: '44px',
+              marginBottom: '12px',
+            }}>
+              "{dialogueNpc.dialogue[dialogueIndex]}"
+            </div>
+
+            {/* Counter + buttons */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={{
+                fontFamily: '"Cinzel", serif',
+                fontSize: '8px',
+                color: 'rgba(212,168,67,0.4)',
+                letterSpacing: '0.1em',
+              }}>
+                {dialogueIndex + 1} / {dialogueNpc.dialogue.length}
+              </div>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button onClick={() => setDialogueNpc(null)} style={{
+                  fontFamily: '"Cinzel", serif', fontSize: '9px',
+                  color: 'rgba(212,168,67,0.5)', background: 'transparent',
+                  border: '1px solid rgba(212,168,67,0.2)', padding: '4px 12px',
+                  cursor: 'pointer', letterSpacing: '0.08em',
+                }}>Close</button>
+                {dialogueIndex < dialogueNpc.dialogue.length - 1 ? (
+                  <button onClick={() => setDialogueIndex(i => i + 1)} style={{
+                    fontFamily: '"Cinzel", serif', fontSize: '9px',
+                    color: '#1a0e05', background: '#d4a843',
+                    border: '1px solid #d4a843', padding: '4px 14px',
+                    cursor: 'pointer', letterSpacing: '0.08em',
+                  }}>Next →</button>
+                ) : (
+                  <button onClick={() => setDialogueNpc(null)} style={{
+                    fontFamily: '"Cinzel", serif', fontSize: '9px',
+                    color: '#1a0e05', background: '#d4a843',
+                    border: '1px solid #d4a843', padding: '4px 14px',
+                    cursor: 'pointer', letterSpacing: '0.08em',
+                  }}>Farewell ✦</button>
+                )}
+              </div>
+            </div>
+
+            {/* Speech bubble triangle pointing down toward NPC */}
+            <div style={{
+              position: 'absolute', bottom: '-10px', left: '50%',
+              transform: 'translateX(-50%)', width: 0, height: 0,
+              borderLeft: '10px solid transparent', borderRight: '10px solid transparent',
+              borderTop: '10px solid #8b6914',
+            }} />
+            <div style={{
+              position: 'absolute', bottom: '-8px', left: '50%',
+              transform: 'translateX(-50%)', width: 0, height: 0,
+              borderLeft: '8px solid transparent', borderRight: '8px solid transparent',
+              borderTop: '8px solid #100a03',
+            }} />
+          </div>
+        );
+      })()}
+
 
             {/* BOOK OVERLAY */}
       {bookOpen && (
@@ -1107,7 +1496,7 @@ export default function GamePage({ onExit }: GamePageProps) {
                       gameRef.current.journeyStarted = true;
                       setBookOpen(false);
                       setBookPage(1);
-                      const door = gameRef.current.level?.doors.find(d => d.id === 'door_0');
+                      const door = gameRef.current.level?.doors.find(d => d.id === 'exit_door_0');
                       if (door) door.open = true;
                       setShowHint('The path is open — walk through the door!');
                       gameRef.current.hintTimer = 4;

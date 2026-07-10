@@ -26,7 +26,13 @@ export function drawBackground(
   }
 
   let customBgDrawn = false;
-  if (level.type === 'ruins' && bgImages) {
+  if (
+    (level.type === 'ruins' ||
+     level.type === 'underwater' ||
+     level.type === 'labyrinth' ||
+     level.type === 'underworld') &&
+    bgImages
+  ) {
     const drawLayer = (img: HTMLImageElement | HTMLCanvasElement | null, factor: number) => {
       if (!img) return false;
       let imgW = 0;
@@ -665,9 +671,141 @@ export function drawCollectible(ctx: CanvasRenderingContext2D, item: Collectible
       ctx.fillRect(x + 4, y - 6, 12, 2);
       break;
     }
+
+    case 'gun': {
+      // Revolver and Lore Book on the table
+      ctx.shadowColor = '#d4a843';
+      ctx.shadowBlur = 15;
+      
+      // Draw Book backdrop
+      ctx.fillStyle = '#6b4c2b';
+      ctx.fillRect(x, y + 4, 18, 12);
+      ctx.fillStyle = '#fdfbf7';
+      ctx.fillRect(x + 1, y + 5, 16, 10);
+      
+      // Draw Revolver on top of book
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = '#3a3a45';
+      ctx.fillRect(x + 4, y + 8, 10, 2); // Barrel
+      ctx.fillRect(x + 4, y + 10, 3, 2); // Cylinder
+      ctx.fillStyle = '#854d0e';
+      ctx.fillRect(x + 2, y + 9, 2, 4);  // Grip
+      break;
+    }
   }
 
   ctx.shadowBlur = 0;
+}
+
+export function drawLadder(ctx: CanvasRenderingContext2D, ladder: { x: number; y: number; w: number; h: number }, cameraX: number) {
+  const x = ladder.x - cameraX;
+  const y = ladder.y;
+
+  ctx.fillStyle = '#4a2f1b'; // Dark wood
+  ctx.strokeStyle = '#2b1a0d';
+  ctx.lineWidth = 2;
+
+  // Rails
+  ctx.fillRect(x, y, 4, ladder.h);
+  ctx.strokeRect(x, y, 4, ladder.h);
+  ctx.fillRect(x + ladder.w - 4, y, 4, ladder.h);
+  ctx.strokeRect(x + ladder.w - 4, y, 4, ladder.h);
+
+  // Rungs
+  ctx.fillStyle = '#664225';
+  for (let ry = y + 8; ry < y + ladder.h; ry += 14) {
+    ctx.fillRect(x + 4, ry, ladder.w - 8, 3);
+    ctx.strokeRect(x + 4, ry, ladder.w - 8, 3);
+  }
+}
+
+export function drawNPCLibrarian(ctx: CanvasRenderingContext2D, npc: { x: number; y: number; w: number; h: number }, cameraX: number) {
+  const x = npc.x - cameraX;
+  const y = npc.y;
+  const s = 2;
+  const frame = Math.floor(Date.now() / 400) % 2;
+  const breathOffset = frame === 0 ? 0 : -1;
+
+  // Head/Hair (gray/white scholarly hair)
+  ctx.fillStyle = '#d1d5db';
+  ctx.fillRect(x + 3 * s, y + breathOffset, 6 * s, 3 * s);
+
+  // Face (skin tone)
+  ctx.fillStyle = '#fbcfe8'; // Pale skin
+  ctx.fillRect(x + 4 * s, y + 2 * s + breathOffset, 4 * s, 4 * s);
+
+  // Beard (long white beard)
+  ctx.fillStyle = '#f3f4f6';
+  ctx.fillRect(x + 4 * s, y + 6 * s + breathOffset, 4 * s, 3 * s);
+
+  // Eyes (dark spectacles look)
+  ctx.fillStyle = '#1e1b4b';
+  ctx.fillRect(x + 5 * s, y + 3 * s + breathOffset, 2 * s, 1 * s);
+
+  // Scholar Gown (dark crimson/brown robes)
+  ctx.fillStyle = '#3f1f1f'; // Crimson Robes
+  ctx.fillRect(x + 2 * s, y + 9 * s, 8 * s, 15 * s);
+
+  // Sleeve decorations / belts
+  ctx.fillStyle = '#d4a843'; // Gold belt
+  ctx.fillRect(x + 2 * s, y + 14 * s, 8 * s, 1 * s);
+
+  // Book in hands
+  ctx.fillStyle = '#78350f'; // Brown book
+  ctx.fillRect(x + 3 * s, y + 11 * s + breathOffset, 4 * s, 3 * s);
+  ctx.fillStyle = '#f9fafb';
+  ctx.fillRect(x + 4 * s, y + 11 * s + breathOffset, 2 * s, 3 * s);
+}
+
+export function drawInteractionTooltip(ctx: CanvasRenderingContext2D, x: number, y: number, text: string) {
+  ctx.save();
+  ctx.font = '10px "Cinzel", serif';
+  const textWidth = ctx.measureText(text).width;
+  const paddingX = 8;
+  const paddingY = 4;
+  const boxW = textWidth + paddingX * 2;
+  const boxH = 16;
+  const boxX = x - boxW / 2;
+  const boxY = y - 28;
+
+  // Pulse opacity
+  const alpha = 0.8 + Math.sin(Date.now() / 200) * 0.15;
+
+  ctx.fillStyle = `rgba(30, 20, 15, ${alpha})`;
+  ctx.strokeStyle = '#d4a843';
+  ctx.lineWidth = 1;
+  ctx.fillRect(boxX, boxY, boxW, boxH);
+  ctx.strokeRect(boxX, boxY, boxW, boxH);
+
+  ctx.fillStyle = '#d4a843';
+  ctx.textAlign = 'center';
+  ctx.fillText(text, x, boxY + 11);
+  ctx.restore();
+}
+
+export function drawFloatingTextHint(ctx: CanvasRenderingContext2D, x: number, y: number, text: string) {
+  ctx.save();
+  ctx.font = 'bold 11px "Cinzel", serif';
+  const textWidth = ctx.measureText(text).width;
+  const paddingX = 10;
+  const paddingY = 6;
+  const boxW = textWidth + paddingX * 2;
+  const boxH = 20;
+  const boxX = x - boxW / 2;
+  const boxY = y - 32;
+
+  // Background box
+  ctx.fillStyle = 'rgba(15, 5, 5, 0.9)';
+  ctx.strokeStyle = '#ef4444'; // Red alert border
+  ctx.lineWidth = 1.5;
+  ctx.fillRect(boxX, boxY, boxW, boxH);
+  ctx.strokeRect(boxX, boxY, boxW, boxH);
+
+  // Text
+  ctx.fillStyle = '#fca5a5';
+  ctx.textAlign = 'center';
+  ctx.fillText(text, x, boxY + 14);
+  ctx.restore();
 }
 
 // ==============================
