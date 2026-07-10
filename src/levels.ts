@@ -77,8 +77,8 @@ export const LEVELS: Level[] = [
     ],
     enemies: [],
     collectibles: [
-      { id: 'gun_pickup',  x: 470, y: 365, type: 'gun',     collected: false },
-      { id: 'journal_0',  x: 430, y: 365, type: 'journal',  collected: false },
+      { id: 'journal_0',  x: 425, y: 365, type: 'journal', collected: false },
+      { id: 'gun_pickup', x: 505, y: 365, type: 'gun',     collected: false },
     ],
     decorations: [
       { x: 80,  y: 390, type: 'torch' },

@@ -395,7 +395,7 @@ export default function GamePage({ onExit }: GamePageProps) {
     if (gameRef.current.shootCooldown > 0) gameRef.current.shootCooldown -= dt;
 
     // --- Shooting Logic ---
-    if (keys['KeyJ'] && gameRef.current.shootCooldown <= 0 && player.bullets > 0) {
+    if (keys['KeyJ'] && gameRef.current.shootCooldown <= 0 && player.bullets > 0 && player.hasGun) {
       player.bullets--;
       gameRef.current.shootCooldown = 0.5; // Half second between shots
       bullets.push({
@@ -844,8 +844,10 @@ export default function GamePage({ onExit }: GamePageProps) {
           const dist = Math.hypot(player.x - item.x, player.y - item.y);
           if (dist < 60) {
             item.collected = true;
-            player.hasGun = true;
-            player.bullets = 6;
+            // Write directly to the ref's player to avoid any stale closure issue
+            gameRef.current.player.hasGun = true;
+            gameRef.current.player.bullets = 6;
+            gameRef.current.shootCooldown = 0; // ready to fire immediately
             setShowHint('Revolver acquired! Press J to shoot.');
             gameRef.current.hintTimer = 3;
           }
