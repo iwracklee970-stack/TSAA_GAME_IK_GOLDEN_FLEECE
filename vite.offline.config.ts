@@ -25,7 +25,7 @@ export default defineConfig(({ mode }) => {
       brotliSize: false,
       rollupOptions: {
         inlineDynamicImports: true,
-      },
+      } as any,
     },
   };
 });

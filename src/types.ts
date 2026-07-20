@@ -75,7 +75,7 @@ export interface Bullet {
 }
 
 // --- Level Types ---
-export type LevelType = 'ruins' | 'underwater' | 'labyrinth' | 'underworld' | 'library';
+export type LevelType = 'ruins' | 'underwater' | 'labyrinth' | 'underworld' | 'library' | 'shore';
 
 export interface Checkpoint {
   id: string;
@@ -117,6 +117,7 @@ export interface Level {
   checkpoints?: Checkpoint[];
   ladders?: Ladder[];
   npcs?: NPC[];
+  grapples?: Point[];
 }
 
 export interface Platform {

@@ -1,12 +1,13 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { useGameLoop } from '../hooks/useGameLoop';
-import { PlayerState, Level, AfterImage, Bullet, NPC } from '../types';
+import { PlayerState, Level, AfterImage, Bullet, NPC, Point } from '../types';
 import { LEVELS } from '../levels';
 import { drawPlayer, drawSkeleton, drawBullet, drawHarpy, drawWallLurker } from './sprites';
 import {
   drawBackground, drawPlatform, drawDoor, drawTrigger,
   drawCollectible, drawDecoration, drawLighting, drawCheckpoint,
-  drawLadder, drawNPCLibrarian, drawInteractionTooltip, drawFloatingTextHint
+  drawLadder, drawNPCLibrarian, drawInteractionTooltip, drawFloatingTextHint,
+  drawBoss, drawBossHealthBar,
 } from './worldRenderer';
 
 // ==============================
@@ -16,7 +17,7 @@ const GRAVITY = 1400;
 const JUMP_FORCE = -520;
 const MOVE_SPEED = 280;
 const FRICTION = 0.82;
-const TORCH_RADIUS = 220;
+const TORCH_RADIUS = 160;
 
 // Dash
 const DASH_SPEED = 900;
@@ -130,6 +131,15 @@ export default function GamePage({ onExit }: GamePageProps) {
   const [transitioning, setTransitioning] = useState(false);
   const [dialogueNpc, setDialogueNpc] = useState<NPC | null>(null);
   const [dialogueIndex, setDialogueIndex] = useState(0);
+  // Force re-render of puzzle UI when sequence changes (since puzzleState lives in a ref)
+  const [puzzleRenderTick, setPuzzleRenderTick] = useState(0);
+  // Puzzle modal — must be React state so the overlay actually renders
+  const [puzzleOpen, setPuzzleOpen] = useState(false);
+  const puzzleOpenRef = useRef(false); // game-loop-accessible mirror
+  // Boss fight — React state drives the health bar HUD
+  const [bossActive, setBossActive] = useState(false);
+  const [bossHp, setBossHp] = useState(6);
+  const bossActiveRef = useRef(false); // game-loop-accessible mirror
   // Screen-space position of the NPC when dialogue is opened (for floating box)
   const dialogueScreenPos = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
 
@@ -184,6 +194,35 @@ export default function GamePage({ onExit }: GamePageProps) {
     // Checkpoint tracking
     checkpoint: null as { x: number; y: number } | null,
     checkpointBullets: 6,
+    checkpointHasGun: false,
+    // LEVEL 2 Custom State
+    isSailing: false,
+    boatX: 60,
+    grapplingState: null as { target: { x: number; y: number }; duration: number; elapsed: number; startX: number; startY: number } | null,
+    puzzleState: { open: false, sequence: [] as number[], completed: false },
+    boulderState: { x: 1120, y: 34, active: false, impactTimer: 0, speedY: 0, speedX: -120 },
+    shakeTimer: 0,
+    woodPlatformDestroyed: false,
+    rainParticles: [] as { x: number; y: number; speed: number; len: number }[],
+    // Boss fight state
+    bossState: {
+      active: false,
+      completed: false,
+      hp: 6,
+      x: 1750,    // centre of arena
+      y: 330,     // stands on arena floor (y:400) minus half height
+      vx: 140,    // moves right initially
+      direction: 1 as 1 | -1,
+      animTimer: 0,
+      weakSpot: {
+        x: 0,       // relative offset from boss centre
+        y: -30,
+        active: false,
+        timer: 0,   // countdown until next state change
+        pulseTimer: 0,
+      },
+      ammoSpawnTimer: 0,
+    },
   });
 
   // Initialize level ref and preload background assets
@@ -232,9 +271,17 @@ export default function GamePage({ onExit }: GamePageProps) {
       gameRef.current.levels = levels;
       const level = levels[lvlIndex];
       gameRef.current.level = level;
-      gameRef.current.player = createPlayer(level);
+      const newPlayer = createPlayer(level);
+      // If the gun was already collected in this level run, restore it
+      const gunItem = level.collectibles.find(c => c.type === 'gun');
+      if (gunItem && gunItem.collected) {
+        newPlayer.hasGun = true;
+        newPlayer.bullets = 6;
+      }
+      gameRef.current.player = newPlayer;
       gameRef.current.checkpoint = null;
-      gameRef.current.checkpointBullets = 6;
+      gameRef.current.checkpointBullets = lvlIndex > 0 ? 6 : 0;
+      gameRef.current.checkpointHasGun = lvlIndex > 0;
       gameRef.current.camera = { x: 0, y: 0 };
       gameRef.current.totalCollected = 0;
       gameRef.current.bullets = [];
@@ -242,8 +289,34 @@ export default function GamePage({ onExit }: GamePageProps) {
       setPlayerHealth(3);
       setCollected(0);
       setShowHint('');
+
+      // LEVEL 2 Custom Initialization (now index 1)
+      gameRef.current.isSailing = (lvlIndex === 1);
+      gameRef.current.boatX = 60;
+      gameRef.current.woodPlatformDestroyed = false;
+      gameRef.current.shakeTimer = 0;
+      gameRef.current.boulderState = { x: 1160, y: 60, active: false, impactTimer: 0, speedY: 0, speedX: -120 };
+      gameRef.current.puzzleState = { open: false, sequence: [], completed: false };
+      gameRef.current.grapplingState = null;
+
+      // LEVEL 4 Custom Initialization (now index 4, id: 4)
+      gameRef.current.bossState = {
+        active: false,
+        completed: false,
+        hp: 6,
+        x: 1750,
+        y: 330,
+        vx: 140,
+        direction: 1,
+        animTimer: 0,
+        weakSpot: { x: 0, y: -30, active: false, timer: 2.0, pulseTimer: 0 },
+        ammoSpawnTimer: 8,
+      };
+      bossActiveRef.current = false;
+      setBossActive(false);
+      setBossHp(6);
     } else {
-      // Soft respawn at last checkpoint — preserve remaining health
+      // Soft respawn at last checkpoint — preserve gun state
       const { player, level } = gameRef.current;
       if (level) {
         const cp = gameRef.current.checkpoint || level.entrance;
@@ -253,20 +326,79 @@ export default function GamePage({ onExit }: GamePageProps) {
         player.vy = 0;
         player.health = currentHealth;
         setPlayerHealth(currentHealth);
-        player.invincibleTimer = 1.2;  // brief i-frame buffer on respawn
+        player.invincibleTimer = 1.2;
         player.grounded = false;
         player.isDashing = false;
         player.dashInvincible = false;
         player.hurtTimer = 0;
+        player.isClimbing = false;
         player.bullets = gameRef.current.checkpointBullets;
+        player.hasGun = gameRef.current.checkpointHasGun; // always restore gun state
         gameRef.current.bullets = [];
         gameRef.current.shootCooldown = 0;
         setShowHint(`Respawned — ${currentHealth} ❤ remaining`);
         gameRef.current.hintTimer = 2;
+
+        // Reset Level 2 specific parts on soft respawn (now id 1)
+        if (level.id === 1) {
+          gameRef.current.isSailing = false;
+          gameRef.current.grapplingState = null;
+          gameRef.current.shakeTimer = 0;
+          // If checkpoint is reached, puzzle remains completed, but make sure boulder isn't re-running
+          if (!gameRef.current.puzzleState.completed) {
+            gameRef.current.boulderState = { x: 1160, y: 60, active: false, impactTimer: 0, speedY: 0, speedX: -120 };
+            gameRef.current.puzzleState = { open: false, sequence: [], completed: false };
+            gameRef.current.woodPlatformDestroyed = false;
+          }
+        }
+
+        // Reset Level 4 specific parts on soft respawn (id 4)
+        if (level.id === 4) {
+          gameRef.current.bossState = {
+            active: false,
+            completed: false,
+            hp: 6,
+            x: 1750,
+            y: 330,
+            vx: 140,
+            direction: 1,
+            animTimer: 0,
+            weakSpot: { x: 0, y: -30, active: false, timer: 2.0, pulseTimer: 0 },
+            ammoSpawnTimer: 8,
+          };
+          bossActiveRef.current = false;
+          setBossActive(false);
+          setBossHp(6);
+
+          // Reset entry/exit doors
+          const gate = level.doors.find(d => d.id === 'boss_gate');
+          if (gate) {
+            gate.open = false;
+            gate.openProgress = 0;
+          }
+          const exitDoor = level.doors.find(d => d.id === 'door_4');
+          if (exitDoor) {
+            exitDoor.open = false;
+            exitDoor.openProgress = 0;
+          }
+
+          // Restore right wall
+          const hasWall = level.platforms.some(p => p.x === 2300 && p.y === 60);
+          if (!hasWall) {
+            level.platforms.push({ x: 2300, y: 60, w: 20, h: 340, style: 'stone' });
+          }
+
+          // Clean up boss spawned collectibles
+          level.collectibles = level.collectibles.filter(c => !c.id.startsWith('boss_ammo_'));
+          level.collectibles.forEach(c => {
+            if (c.id === 'ammo_4a' || c.id === 'ammo_4b' || c.id === 'fleece') {
+              c.collected = false;
+            }
+          });
+        }
       }
     }
   }, []);
-
   const startGame = useCallback(() => {
     setLevelIndex(0);
     levelIndexRef.current = 0;
@@ -353,29 +485,163 @@ export default function GamePage({ onExit }: GamePageProps) {
     return () => window.removeEventListener('keydown', handleDialogueKey);
   }, [dialogueNpc]);
 
-  // Resize canvas
+  // Resize canvas to fixed 1280x720
   useEffect(() => {
-    const resize = () => {
-      const c = canvasRef.current;
-      if (!c) return;
-      c.width = window.innerWidth;
-      c.height = window.innerHeight;
-    };
-    resize();
-    window.addEventListener('resize', resize);
-    return () => window.removeEventListener('resize', resize);
+    const c = canvasRef.current;
+    if (!c) return;
+    c.width = 1280;
+    c.height = 720;
   }, []);
 
   // ==============================
   // GAME LOOP
   // ==============================
   useGameLoop((dt) => {
-    if (gameState !== 'playing' || bookOpen || transitioning || dialogueNpc) return;
-    const { player, keys, level, camera, bullets } = gameRef.current;
-    if (!level) return;
+    // Decrease shake timer if active
+    if (gameRef.current.shakeTimer > 0) {
+      gameRef.current.shakeTimer = Math.max(0, gameRef.current.shakeTimer - dt);
+    }
 
     const canvas = canvasRef.current;
     if (!canvas) return;
+
+    // --- Rain System (Level 2 specific) ---
+    if (gameRef.current.level?.id === 1) {
+      if (gameRef.current.rainParticles.length === 0) {
+        for (let i = 0; i < 80; i++) {
+          gameRef.current.rainParticles.push({
+            x: Math.random() * canvas.width,
+            y: Math.random() * canvas.height,
+            speed: 300 + Math.random() * 200,
+            len: 10 + Math.random() * 10
+          });
+        }
+      }
+      const scale = canvas.height / 520;
+      const scaledW = canvas.width / scale;
+      gameRef.current.rainParticles.forEach(p => {
+        p.y += p.speed * dt;
+        p.x -= p.speed * 0.35 * dt;
+        if (p.y > 520) {
+          p.y = -20;
+          p.x = Math.random() * (scaledW + 200);
+        }
+        if (p.x < -20) {
+          p.x = scaledW + 20;
+          p.y = Math.random() * 200 - 100;
+        }
+      });
+    }
+
+    if (gameState !== 'playing' || bookOpen || transitioning || dialogueNpc || puzzleOpenRef.current) return;
+    const { player, keys, level, camera, bullets } = gameRef.current;
+    if (!level) return;
+
+    // --- Sailing Cutscene (Level 2 intro) ---
+    if (level.id === 1 && gameRef.current.isSailing) {
+      gameRef.current.boatX += dt * 65;
+      player.x = gameRef.current.boatX;
+      player.y = 382;
+      player.vx = 0;
+      player.vy = 0;
+      player.grounded = true;
+      player.animState = 'idle';
+
+      // Camera follow boat
+      const scale = canvas.height / 520;
+      const scaledW = canvas.width / scale;
+      const targetCamX = Math.max(0, player.x - scaledW / 3);
+      camera.x += (targetCamX - camera.x) * 0.08;
+
+      if (gameRef.current.boatX >= 310) {
+        gameRef.current.isSailing = false;
+        // Trigger monologue dialogues
+        const monologueNpc = {
+          id: 'player_monologue',
+          x: player.x,
+          y: player.y,
+          w: player.width,
+          h: player.height,
+          name: 'Me',
+          dialogue: [
+            "The map the librarian gave me seems to point to this very Island...",
+            "But... it's not charted on any conventional map...",
+            "What was he really after in the past? I must figure it out."
+          ]
+        };
+        const displayScale = canvas.clientHeight / 520;
+        const screenX = (player.x + player.width / 2 - camera.x) * displayScale;
+        const screenY = (player.y) * displayScale;
+        dialogueScreenPos.current = { x: screenX, y: screenY };
+        setDialogueNpc(monologueNpc);
+        setDialogueIndex(0);
+      }
+
+      draw();
+      return;
+    }
+
+    // --- Grappling Hook Pull Movement ---
+    if (level.id === 1 && gameRef.current.grapplingState) {
+      const gs = gameRef.current.grapplingState;
+      gs.elapsed += dt;
+      const t = Math.min(1, gs.elapsed / gs.duration);
+      player.x = gs.startX + (gs.target.x - player.width / 2 - gs.startX) * t;
+      player.y = gs.startY + (gs.target.y - player.height - gs.startY) * t;
+      player.vx = 0;
+      player.vy = 0;
+      player.grounded = false;
+      player.animState = 'jump_rise';
+
+      if (t >= 1) {
+        gameRef.current.grapplingState = null;
+        player.grounded = true;
+      }
+
+      const scale = canvas.height / 520;
+      const scaledW = canvas.width / scale;
+      const targetCamX = Math.max(0, player.x - scaledW / 3);
+      camera.x += (targetCamX - camera.x) * 0.08;
+      draw();
+      return;
+    }
+
+    // --- Boulder Drop & Danger Zone Update ---
+    if (level.id === 1 && gameRef.current.boulderState.active) {
+      const bs = gameRef.current.boulderState;
+      bs.x += bs.speedX * dt;
+
+      if (bs.x > 1020) {
+        // Roll horizontally along top platform
+        bs.y = 34;
+        bs.speedY = 0;
+      } else {
+        // Fall down after rolling off
+        bs.y += bs.speedY * dt;
+        bs.speedY += 450 * dt; // Gravity
+      }
+
+      // Check collision with destructible wood platform at x: 920, y: 160
+      if (bs.x <= 980 && bs.x >= 900 && bs.y >= 140 && bs.y <= 185) {
+        bs.active = false;
+        gameRef.current.woodPlatformDestroyed = true;
+        gameRef.current.shakeTimer = 0.6; // screen shake on impact
+      }
+
+      // Check Danger Zone (lethal proximity to rolling/falling boulder)
+      const distToBoulder = Math.hypot((player.x + player.width / 2) - bs.x, (player.y + player.height / 2) - bs.y);
+      if (distToBoulder < 32) {
+        player.health = 0;
+        setPlayerHealth(0);
+        setGameState('lost');
+      }
+    }
+
+    // --- Invisible Shore Boundary (water side) ---
+    if (level.id === 1 && player.x < 295) {
+      player.x = 295;
+      player.vx = 0;
+    }
 
     // --- Hint timer ---
     if (gameRef.current.hintTimer > 0) {
@@ -470,6 +736,10 @@ export default function GamePage({ onExit }: GamePageProps) {
       let onLadder = false;
       if (level.ladders) {
         for (const ladder of level.ladders) {
+          // In Level 1 (Shore of Colchis), the ladder at x: 950 is only revealed/climbable after wood platform is destroyed
+          if (level.id === 1 && ladder.x === 950 && !gameRef.current.woodPlatformDestroyed) {
+            continue;
+          }
           const overlapX = player.x + player.width > ladder.x && player.x < ladder.x + ladder.w;
           const overlapY = player.y + player.height > ladder.y && player.y < ladder.y + ladder.h;
           if (overlapX && overlapY) {
@@ -572,8 +842,62 @@ export default function GamePage({ onExit }: GamePageProps) {
       if (!isMoving || player.hurtTimer > 0) player.vx *= FRICTION;
     }
 
-    // Move
+    // ─────────────────────────────────────────────────────────────────────────
+    // Build solid list BEFORE movement so both passes share the same geometry
+    // ─────────────────────────────────────────────────────────────────────────
+    const ladderXRanges = (level.ladders || []).map(l => ({ x: l.x, right: l.x + l.w }));
+    const isPlatformBlockingLadder = (px: number, pw: number) =>
+      player.isClimbing && ladderXRanges.some(l => px < l.right && px + pw > l.x);
+
+    const allSolids = [
+      ...level.platforms
+        .filter(p => !isPlatformBlockingLadder(p.x, p.w))
+        .filter(p => !(level.id === 1 && p.x === 920 && p.y === 160 && gameRef.current.woodPlatformDestroyed))
+        .map(p => ({ x: p.x, y: p.y, w: p.w, h: p.h })),
+      ...level.doors.filter(d => {
+        const isLockedDoor = (level.id === 0 && d.id === 'door_0') ||
+                             (level.id === 2 && d.id === 'gate_2');
+        if (isLockedDoor) return d.openProgress < 0.9;
+        const playerInDoor = player.x < d.x + d.w && player.x + player.width > d.x &&
+                             player.y < d.y + d.h && player.y + player.height > d.y;
+        return (!d.open || d.openProgress < 0.9) && !playerInDoor;
+      }).map(d => {
+        const drawH = d.h * (1 - d.openProgress);
+        return { x: d.x, y: d.y + (d.h - drawH), w: d.w, h: drawH };
+      }),
+    ];
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // TWO-PASS SWEEP COLLISION
+    // Pass 1 — X axis: apply horizontal movement, then push out of walls only
+    // ─────────────────────────────────────────────────────────────────────────
     player.x += player.vx * dt;
+    allSolids.forEach(plat => {
+      const pRight   = player.x + player.width;
+      const pBottom  = player.y + player.height;
+      const platRight  = plat.x + plat.w;
+      const platBottom = plat.y + plat.h;
+
+      // Only handle overlaps where Y was ALREADY overlapping before this move
+      // (i.e. there is genuine horizontal penetration, not a corner graze)
+      if (player.x >= platRight || pRight <= plat.x) return; // no X overlap
+      if (player.y >= platBottom || pBottom <= plat.y) return; // no Y overlap
+
+      const overlapLeft  = pRight  - plat.x;
+      const overlapRight = platRight - player.x;
+
+      // Push out on the smaller horizontal penetration side
+      if (overlapLeft < overlapRight) {
+        player.x = plat.x - player.width;
+      } else {
+        player.x = platRight;
+      }
+      player.vx = 0;
+    });
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Pass 2 — Y axis: apply vertical movement, then land/ceiling only
+    // ─────────────────────────────────────────────────────────────────────────
     player.y += player.vy * dt;
 
     // --- Afterimage fade ---
@@ -622,63 +946,33 @@ export default function GamePage({ onExit }: GamePageProps) {
       }
     }
 
-    // --- Platform collision ---
     player.grounded = false;
-
-    // When climbing a ladder, platforms that the ladder passes through should not block the player
-    const ladderXRanges = (level.ladders || []).map(l => ({ x: l.x, right: l.x + l.w }));
-    const isPlatformBlockingLadder = (px: number, pw: number) =>
-      player.isClimbing && ladderXRanges.some(l => px < l.right && px + pw > l.x);
-
-    // Door collision (closed doors act as solid walls)
-    const allSolids = [
-      ...level.platforms
-        .filter(p => !isPlatformBlockingLadder(p.x, p.w))
-        .map(p => ({ x: p.x, y: p.y, w: p.w, h: p.h })),
-      ...level.doors.filter(d => {
-        // Locked doors (like the blue door_0 in Level 0) are ALWAYS solid when closed.
-        // They must never apply the playerInDoor bypass — player cannot phase through.
-        const isLockedDoor = level.id === 0 && d.id === 'door_0';
-        if (isLockedDoor) {
-          // Solid as long as it's not fully open
-          return d.openProgress < 0.9;
-        }
-        // For sliding exit doors: skip collision if player is already inside
-        // (prevents them from getting trapped when a door closes behind them)
-        const playerInDoor = player.x < d.x + d.w && player.x + player.width > d.x &&
-                             player.y < d.y + d.h && player.y + player.height > d.y;
-        return (!d.open || d.openProgress < 0.9) && !playerInDoor;
-      }).map(d => {
-        const drawH = d.h * (1 - d.openProgress);
-        return { x: d.x, y: d.y + (d.h - drawH), w: d.w, h: drawH };
-      }),
-    ];
-
     allSolids.forEach(plat => {
-      const pRight = player.x + player.width;
-      const pBottom = player.y + player.height;
-      const platRight = plat.x + plat.w;
+      const pRight   = player.x + player.width;
+      const pBottom  = player.y + player.height;
+      const platRight  = plat.x + plat.w;
       const platBottom = plat.y + plat.h;
 
-      if (player.x < platRight && pRight > plat.x && player.y < platBottom && pBottom > plat.y) {
-        const overlapX = Math.min(pRight - plat.x, platRight - player.x);
-        const overlapY = Math.min(pBottom - plat.y, platBottom - player.y);
+      if (player.x >= platRight || pRight <= plat.x) return; // no X overlap
+      if (player.y >= platBottom || pBottom <= plat.y) return; // no Y overlap
 
-        if (overlapX > overlapY) {
-          if (player.vy > 0) {
-            player.y = plat.y - player.height;
-            player.vy = 0;
-            player.grounded = true;
-            player.canAirDash = true;
-            player.hasDoubleJumped = false;
-          } else if (player.vy < 0) {
-            player.y = plat.y + plat.h;
-            player.vy = 0;
-          }
-        } else {
-          if (player.vx > 0) player.x = plat.x - player.width;
-          else if (player.vx < 0) player.x = plat.x + plat.w;
-          player.vx = 0;
+      const overlapTop    = pBottom - plat.y;    // penetration from above
+      const overlapBottom = platBottom - player.y; // penetration from below
+
+      if (overlapTop < overlapBottom) {
+        // Player lands on top
+        if (player.vy >= 0) {
+          player.y = plat.y - player.height;
+          player.vy = 0;
+          player.grounded = true;
+          player.canAirDash = true;
+          player.hasDoubleJumped = false;
+        }
+      } else {
+        // Player hits ceiling from below
+        if (player.vy < 0) {
+          player.y = platBottom;
+          player.vy = 0;
         }
       }
     });
@@ -763,11 +1057,12 @@ export default function GamePage({ onExit }: GamePageProps) {
       const playerInDoor = player.x < door.x + door.w && player.x + player.width > door.x &&
                            player.y < door.y + door.h && player.y + player.height > door.y;
       
-      // The blue locked door (door_0 on level 0) only opens via lever — not proximity
-      const isLockedDoor = level.id === 0 && door.id === 'door_0';
+      // Blue locked doors (door_0 on level 0, gate_2 on level 2) only open via lever — not proximity
+      const isLockedDoor = (level.id === 0 && door.id === 'door_0') ||
+                           (level.id === 2 && door.id === 'gate_2');
       
-      // Exit doors on non-level-0 levels open by proximity; library door requires journey started
-      const isExitDoor = door.id.startsWith('door_') && !isLockedDoor;
+      // Exit doors open by proximity; library door requires journey started
+      const isExitDoor = (door.id.startsWith('door_')) && !isLockedDoor;
       const playerNear = isExitDoor && (level.type !== 'library' || gameRef.current.journeyStarted) && Math.abs(player.x - door.x) < 100;
       
       const shouldOpen = door.open || playerInDoor || (!isLockedDoor && playerNear);
@@ -801,6 +1096,70 @@ export default function GamePage({ onExit }: GamePageProps) {
     if (keys['KeyE']) {
       keys['KeyE'] = false; // consume the key press
 
+      // LEVEL 4: Boss gate interaction
+      if (level.id === 4 && !gameRef.current.bossState.active && !gameRef.current.bossState.completed) {
+        const gate = level.doors.find(d => d.id === 'boss_gate');
+        if (gate && !gate.open && Math.abs(player.x - 1295) < 80 && Math.abs(player.y - 350) < 80) {
+          // Start the boss fight
+          gameRef.current.bossState.active = true;
+          gameRef.current.bossState.hp = 6;
+          gameRef.current.bossState.x = 1750;
+          gameRef.current.bossState.y = 330;
+          gameRef.current.bossState.vx = 140;
+          gameRef.current.bossState.animTimer = 0;
+          gameRef.current.bossState.weakSpot = { x: 0, y: -30, active: false, timer: 2.0, pulseTimer: 0 };
+          gameRef.current.bossState.ammoSpawnTimer = 8;
+          bossActiveRef.current = true;
+          setBossActive(true);
+          setBossHp(6);
+          // Seal the entry gate behind the player
+          gate.open = false;
+          gate.openProgress = 0;
+          // Push player into arena
+          player.x = 1350;
+          setShowHint('The gate seals behind you... defeat the Chimera!');
+          gameRef.current.hintTimer = 3;
+        }
+      }
+
+      // LEVEL 2 custom interactions
+      if (level.id === 1) {
+        // Grapple Hook check
+        if (level.grapples) {
+          let nearestAnchor: Point | null = null;
+          let nearestDist = 120;
+          level.grapples.forEach(anchor => {
+            const dist = Math.hypot((player.x + player.width/2) - anchor.x, (player.y + player.height/2) - anchor.y);
+            if (dist < nearestDist) {
+              nearestDist = dist;
+              nearestAnchor = anchor;
+            }
+          });
+          if (nearestAnchor) {
+            gameRef.current.grapplingState = {
+              target: nearestAnchor,
+              duration: 1.0,
+              elapsed: 0,
+              startX: player.x,
+              startY: player.y
+            };
+            return;
+          }
+        }
+
+        // Ancient Seal Puzzle check
+        if (!gameRef.current.puzzleState.completed) {
+          const distToPuzzle = Math.abs(player.x - 1080);
+          if (distToPuzzle < 60 && Math.abs(player.y - 120) < 60) {
+            // Reset sequence each time puzzle opens
+            gameRef.current.puzzleState.sequence = [];
+            puzzleOpenRef.current = true;
+            setPuzzleOpen(true);
+            return;
+          }
+        }
+      }
+
       // Talk to NPC
       if (level.npcs) {
         for (const npc of level.npcs) {
@@ -809,7 +1168,7 @@ export default function GamePage({ onExit }: GamePageProps) {
             // Compute NPC screen position for the floating dialogue box
             const cvs = canvasRef.current;
             if (cvs) {
-              const scale = cvs.height / 520;
+              const scale = cvs.clientHeight / 520;
               const screenX = (npc.x + npc.w / 2 - camera.x) * scale;
               const screenY = (npc.y) * scale;
               dialogueScreenPos.current = { x: screenX, y: screenY };
@@ -859,6 +1218,8 @@ export default function GamePage({ onExit }: GamePageProps) {
     level.collectibles.forEach(item => {
       if (item.collected) return;
       if (item.type === 'gun') return; // gun is E-key only
+      // Golden Fleece only collectable after boss is defeated
+      if (item.type === 'golden_fleece' && level.id === 4 && !gameRef.current.bossState.completed) return;
       const dist = Math.hypot(player.x - item.x, player.y - item.y);
       if (dist < 30) {
         item.collected = true;
@@ -875,6 +1236,11 @@ export default function GamePage({ onExit }: GamePageProps) {
         if (item.type === 'scroll') {
           setShowHint('Note: Tbilisi university archives, 1938. The Fleece awaits...');
           gameRef.current.hintTimer = 4;
+          return;
+        }
+        if (item.type === 'golden_fleece' && level.id === 4) {
+          // Victory!
+          setGameState('win');
           return;
         }
         gameRef.current.totalCollected++;
@@ -1022,8 +1388,119 @@ export default function GamePage({ onExit }: GamePageProps) {
       }
     });
 
+    // --- Boss Fight AI (Level 4) ---
+    if (level.id === 4 && gameRef.current.bossState.active) {
+      const bs = gameRef.current.bossState;
+
+      // Animation timer
+      bs.animTimer += dt;
+
+      // Movement — bounce between arena walls (x: 1320 to x: 2270)
+      bs.x += bs.vx * dt;
+      if (bs.x > 2220) { bs.x = 2220; bs.vx = -Math.abs(bs.vx); bs.direction = -1; }
+      if (bs.x < 1380) { bs.x = 1380; bs.vx = Math.abs(bs.vx); bs.direction = 1; }
+      // Face player
+      if (player.x > bs.x) { bs.direction = 1; } else { bs.direction = -1; }
+
+      // Weak spot cycling
+      const ws = bs.weakSpot;
+      ws.timer -= dt;
+      if (ws.active) ws.pulseTimer += dt;
+      if (ws.timer <= 0) {
+        if (ws.active) {
+          // Deactivate, hide for 2-4 seconds
+          ws.active = false;
+          ws.timer = 2.5 + Math.random() * 2;
+          ws.pulseTimer = 0;
+        } else {
+          // Activate at a random spot on the boss
+          ws.active = true;
+          ws.timer = 3.0 + Math.random() * 1.5; // visible for 3-4.5 seconds
+          const positions = [
+            { x: 65, y: -24 }, // head
+            { x: -20, y: -10 }, // back
+            { x: 30, y: 15 },  // body
+            { x: -50, y: 0 },  // tail-root
+          ];
+          const picked = positions[Math.floor(Math.random() * positions.length)];
+          ws.x = picked.x;
+          ws.y = picked.y;
+        }
+      }
+
+      // Bullet vs weak-spot collision
+      if (ws.active) {
+        // Weak spot world position = boss centre + relative offset (accounting for direction flip)
+        const wsWorldX = bs.x + ws.x * bs.direction;
+        const wsWorldY = bs.y + ws.y;
+        const wsRadius = 16;
+        bullets.forEach(b => {
+          if (!b.active) return;
+          const dist = Math.hypot(b.x - wsWorldX, b.y - wsWorldY);
+          if (dist < wsRadius) {
+            b.active = false;
+            ws.active = false;
+            ws.timer = 1.5;
+            bs.hp -= 1;
+            gameRef.current.shakeTimer = 0.25;
+            setBossHp(bs.hp);
+            if (bs.hp <= 0) {
+              // Boss defeated!
+              bs.active = false;
+              bs.completed = true;
+              bossActiveRef.current = false;
+              setBossActive(false);
+              // Open the exit: remove the right wall block and open door_4
+              const exitDoor = level.doors.find(d => d.id === 'door_4');
+              if (exitDoor) { exitDoor.open = true; exitDoor.openProgress = 1; }
+              // Remove arena right-wall platform so player can walk out
+              const wallIdx = level.platforms.findIndex(p => p.x === 2300 && p.y === 60 && p.h === 340);
+              if (wallIdx >= 0) level.platforms.splice(wallIdx, 1);
+              setShowHint('The Chimera falls! The Golden Fleece awaits...');
+              gameRef.current.hintTimer = 4;
+            }
+          }
+        });
+      }
+
+      // Player vs boss body collision damage
+      const bossHalfW = 60;
+      const bossHalfH = 40;
+      if (
+        player.x < bs.x + bossHalfW && player.x + player.width > bs.x - bossHalfW &&
+        player.y < bs.y + bossHalfH && player.y + player.height > bs.y - bossHalfH
+      ) {
+        takeDamageRef.current(false, bs.x);
+      }
+
+      // Ammo spawning — periodically drop an ammo box on a platform during the fight
+      bs.ammoSpawnTimer -= dt;
+      if (bs.ammoSpawnTimer <= 0) {
+        bs.ammoSpawnTimer = 10 + Math.random() * 6;
+        // Check if there are any uncollected ammo boxes in the arena
+        const arenaAmmo = level.collectibles.filter(c => c.type === 'ammo_refill' && !c.collected && c.x > 1300 && c.x < 2300);
+        if (arenaAmmo.length < 2) {
+          // Spawn ammo on one of the floating platforms
+          const spawnSpots = [
+            { x: 1430, y: 258 }, { x: 1650, y: 178 }, { x: 1870, y: 248 },
+            { x: 2100, y: 178 }, { x: 2200, y: 278 },
+          ];
+          const spot = spawnSpots[Math.floor(Math.random() * spawnSpots.length)];
+          level.collectibles.push({
+            id: `boss_ammo_${Date.now()}`,
+            x: spot.x,
+            y: spot.y,
+            type: 'ammo_refill',
+            collected: false,
+          });
+        }
+      }
+    }
+
     // --- Camera ---
-    const targetCamX = Math.max(0, player.x - canvas.width / 3);
+    const scaleVal = canvas.height / 520;
+    const logicalW = canvas.width / scaleVal;
+    const targetCamX = Math.max(0, player.x - logicalW / 2 + player.width / 2);
     camera.x += (targetCamX - camera.x) * 0.08;
 
     // --- DRAW ---
@@ -1048,6 +1525,13 @@ export default function GamePage({ onExit }: GamePageProps) {
     const scale = H / 520;
     ctx.save();
     ctx.scale(scale, scale);
+    // Camera shake in game coords
+    if (gameRef.current.shakeTimer > 0) {
+      const shakeAmt = 8 * (gameRef.current.shakeTimer / 0.6);
+      const dx = (Math.random() - 0.5) * shakeAmt;
+      const dy = (Math.random() - 0.5) * shakeAmt;
+      ctx.translate(dx, dy);
+    }
     const scaledW = W / scale;
     const scaledH = H / scale;
 
@@ -1068,7 +1552,12 @@ export default function GamePage({ onExit }: GamePageProps) {
     level.decorations.forEach(d => drawDecoration(ctx, d, camera.x));
 
     // 3. Platforms
-    level.platforms.forEach(p => drawPlatform(ctx, p, camera.x));
+    level.platforms.forEach(p => {
+      if (level.id === 1 && p.x === 920 && p.y === 160 && gameRef.current.woodPlatformDestroyed) {
+        return;
+      }
+      drawPlatform(ctx, p, camera.x);
+    });
 
     // 3.5. Ladders
     if (level.ladders) {
@@ -1096,6 +1585,149 @@ export default function GamePage({ onExit }: GamePageProps) {
       level.npcs.forEach(n => drawNPCLibrarian(ctx, n, camera.x));
     }
 
+    // --- LEVEL 2 Custom Midground Visuals ---
+    if (level.id === 1) {
+      // Draw Grapple Points
+      if (level.grapples) {
+        level.grapples.forEach(anchor => {
+          const ax = anchor.x - camera.x;
+          const ay = anchor.y;
+          // Ornate anchor ring
+          ctx.fillStyle = '#5c3a21'; // bronze wood backplate
+          ctx.fillRect(ax - 7, ay - 7, 14, 14);
+          ctx.fillStyle = '#d4a843'; // Golden outer ring
+          ctx.beginPath();
+          ctx.arc(ax, ay, 5, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = '#1e293b'; // Hole matching dark bg
+          ctx.beginPath();
+          ctx.arc(ax, ay, 2.5, 0, Math.PI * 2);
+          ctx.fill();
+        });
+      }
+
+      // Draw Grappling Hook Rope
+      if (gameRef.current.grapplingState) {
+        const gs = gameRef.current.grapplingState;
+        ctx.save();
+        ctx.strokeStyle = '#e2e8f0';
+        ctx.lineWidth = 1.8;
+        ctx.setLineDash([4, 2]); // Rope texture
+        ctx.beginPath();
+        ctx.moveTo(player.x + player.width / 2 - camera.x, player.y + player.height / 2);
+        ctx.lineTo(gs.target.x - camera.x, gs.target.y);
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      // Draw Greek Statue (Puzzle Anchor point)
+      const px = 1080 - camera.x;
+      ctx.save();
+      
+      // Pedestal / Base
+      ctx.fillStyle = '#94a3b8'; // Darker grey stone
+      ctx.fillRect(px - 10, 148, 20, 12);
+      ctx.strokeStyle = '#475569';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(px - 10, 148, 20, 12);
+
+      // Body / Torso
+      ctx.fillStyle = '#cbd5e1'; // Marble white/light grey
+      ctx.beginPath();
+      ctx.moveTo(px - 6, 148);
+      ctx.lineTo(px - 4, 132);
+      ctx.lineTo(px + 4, 132);
+      ctx.lineTo(px + 6, 148);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+
+      // Head
+      ctx.beginPath();
+      ctx.arc(px, 126, 4.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+
+      // Golden robe sash details
+      ctx.strokeStyle = '#d4a843'; 
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(px - 4, 134);
+      ctx.lineTo(px + 5, 144);
+      ctx.stroke();
+
+      // Floating indicator ring above head
+      ctx.strokeStyle = '#d4a843';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(px, 108, 8, 0, Math.PI * 2);
+      ctx.stroke();
+      
+      ctx.fillStyle = gameRef.current.puzzleState.completed ? 'rgba(34, 197, 94, 0.25)' : 'rgba(239, 68, 68, 0.25)';
+      ctx.beginPath();
+      ctx.arc(px, 108, 7, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = gameRef.current.puzzleState.completed ? '#22c55e' : '#ef4444';
+      ctx.font = 'bold 8px "Cinzel", serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(gameRef.current.puzzleState.completed ? '✓' : '🜔', px, 108);
+      ctx.restore();
+
+
+
+      // Draw Boulder
+      if (!gameRef.current.woodPlatformDestroyed || gameRef.current.boulderState.active) {
+        const bs = gameRef.current.boulderState;
+        const bX = bs.x - camera.x;
+        const bY = bs.y;
+        ctx.fillStyle = '#334155';
+        ctx.strokeStyle = '#0f172a';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(bX, bY, 16, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        // Boulder cracks
+        ctx.strokeStyle = '#1e293b';
+        ctx.beginPath();
+        ctx.moveTo(bX - 8, bY - 6);
+        ctx.lineTo(bX + 6, bY + 8);
+        ctx.stroke();
+      }
+
+      // Draw Campfire
+      const cfx = 420 - camera.x;
+      const cfy = 405;
+      // Wood logs
+      ctx.fillStyle = '#7c2d12';
+      ctx.fillRect(cfx - 10, cfy + 10, 20, 5);
+      ctx.fillRect(cfx - 6, cfy + 7, 12, 5);
+      // Flame particles (simple animated triangles)
+      const flameHeight = 12 + Math.sin(Date.now() / 80) * 4;
+      const grad = ctx.createLinearGradient(cfx, cfy + 10, cfx, cfy + 10 - flameHeight);
+      grad.addColorStop(0, '#f97316');
+      grad.addColorStop(1, '#ef4444');
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.moveTo(cfx - 8, cfy + 10);
+      ctx.lineTo(cfx + 8, cfy + 10);
+      ctx.lineTo(cfx, cfy + 10 - flameHeight);
+      ctx.closePath();
+      ctx.fill();
+      // Smoke
+      ctx.fillStyle = 'rgba(148, 163, 184, 0.15)';
+      for (let s = 0; s < 3; s++) {
+        const sy = cfy - 5 - ((Date.now() / 15 + s * 30) % 60);
+        const sx = cfx + Math.sin(Date.now() / 200 + s) * 6;
+        const radius = 6 + (cfy - sy) * 0.15;
+        ctx.beginPath();
+        ctx.arc(sx, sy, radius, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
     // 7. Enemies (Draw by type)
     level.enemies.forEach(e => {
       if (!e.alive) return;
@@ -1108,6 +1740,14 @@ export default function GamePage({ onExit }: GamePageProps) {
       }
     });
 
+    // 7.5 Boss (Level 4)
+    if (level.id === 4 && (gameRef.current.bossState.active || (gameRef.current.bossState.completed === false && gameRef.current.bossState.hp > 0))) {
+      const bs = gameRef.current.bossState;
+      if (bs.active) {
+        drawBoss(ctx, bs.x, bs.y, camera.x, bs.direction, bs.animTimer, bs.weakSpot, 1);
+      }
+    }
+
     // Bullets
     gameRef.current.bullets.forEach(b => drawBullet(ctx, b, camera.x));
 
@@ -1118,6 +1758,36 @@ export default function GamePage({ onExit }: GamePageProps) {
     }
     drawPlayer(ctx, player, camera.x);
     ctx.globalAlpha = 1;
+
+    // Draw Boat on top of the player
+    if (level.id === 1) {
+      const bx = (gameRef.current.isSailing ? gameRef.current.boatX : 310) - camera.x;
+      const by = 382;
+      // Boat Hull (Bigger: covers from by + 20 to by + 38, width from bx - 36 to bx + 36)
+      ctx.fillStyle = '#7c2d12';
+      ctx.beginPath();
+      ctx.moveTo(bx - 36, by + 20);
+      ctx.lineTo(bx + 36, by + 20);
+      ctx.lineTo(bx + 24, by + 38);
+      ctx.lineTo(bx - 24, by + 38);
+      ctx.closePath();
+      ctx.fill();
+      // Mast (Bigger: goes up to by - 15)
+      ctx.strokeStyle = '#431407';
+      ctx.lineWidth = 3.5;
+      ctx.beginPath();
+      ctx.moveTo(bx, by + 20);
+      ctx.lineTo(bx, by - 15);
+      ctx.stroke();
+      // Sail (Bigger)
+      ctx.fillStyle = '#f8fafc';
+      ctx.beginPath();
+      ctx.moveTo(bx, by - 12);
+      ctx.lineTo(bx + 22, by + 2);
+      ctx.lineTo(bx, by + 16);
+      ctx.closePath();
+      ctx.fill();
+    }
 
     // 8.5. Floating Text Hint above Player
     if (player.floatingHintText && player.floatingHintTimer && player.floatingHintTimer > 0) {
@@ -1163,14 +1833,78 @@ export default function GamePage({ onExit }: GamePageProps) {
       }
     });
 
+    // Level 2 Grapple prompt
+    if (level.id === 1 && level.grapples) {
+      level.grapples.forEach(anchor => {
+        const dist = Math.hypot((player.x + player.width/2) - anchor.x, (player.y + player.height/2) - anchor.y);
+        if (dist < 120) {
+          promptText = "[E] Grapple";
+          promptX = anchor.x;
+          promptY = anchor.y;
+        }
+      });
+    }
+
+    // Level 2 Puzzle prompt
+    if (level.id === 1 && !gameRef.current.puzzleState.completed) {
+      const distToPuzzle = Math.abs(player.x - 1080);
+      if (distToPuzzle < 60 && Math.abs(player.y - 120) < 60) {
+        promptText = "[E] Inspect Statue";
+        promptX = 1080;
+        promptY = 120;
+      }
+    }
+
+    // Level 4 Boss Gate prompt
+    if (level.id === 4 && !gameRef.current.bossState.active && !gameRef.current.bossState.completed) {
+      if (Math.abs(player.x - 1295) < 80 && Math.abs(player.y - 350) < 80) {
+        promptText = "[E] Enter the Arena";
+        promptX = 1295;
+        promptY = 300;
+      }
+    }
+
     if (promptText) {
       drawInteractionTooltip(ctx, promptX - camera.x, promptY, promptText);
     }
 
-    // 9. Lighting
-    drawLighting(ctx, player.x - camera.x, player.y, player.direction, scaledW, scaledH, TORCH_RADIUS);
+    // Level 2: progression door locked hint
+    if (level.id === 1) {
+      const exitDoor = level.doors.find(d => d.id === 'exit_door_2');
+      if (exitDoor && !exitDoor.open) {
+        const distToDoor = Math.hypot(player.x - exitDoor.x, player.y - exitDoor.y);
+        if (distToDoor < 80) {
+          drawFloatingTextHint(ctx, player.x + player.width / 2 - camera.x, player.y - 10, 'I need to find a way to open this');
+        }
+      }
+    }
+
+    // 9. Fog-of-War Lighting
+    drawLighting(ctx, player.x - camera.x, player.y, player.direction, scaledW, scaledH, TORCH_RADIUS, null);
+
+    // 10. Level 2 Foreground Rain (drawn after lighting, in scaled space)
+    if (level.id === 1) {
+      ctx.save();
+      gameRef.current.rainParticles.forEach(p => {
+        ctx.strokeStyle = 'rgba(147, 197, 253, 0.22)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(p.x, p.y);
+        ctx.lineTo(p.x - p.len * 0.35, p.y + p.len);
+        ctx.stroke();
+      });
+      ctx.restore();
+    }
 
     ctx.restore();
+
+    // 11. Boss Health Bar (drawn in canvas pixel space after game transform is restored)
+    if (level.id === 4 && gameRef.current.bossState.active) {
+      const bs = gameRef.current.bossState;
+      const hudScale = H / 520;
+      drawBossHealthBar(ctx, bs.hp, 6, W, hudScale);
+    }
+
   };
 
   // ==============================
@@ -1197,6 +1931,65 @@ export default function GamePage({ onExit }: GamePageProps) {
   return (
     <div className="game-fullscreen" style={{ cursor: (gameState === 'playing' && !bookOpen && !dialogueNpc) ? 'none' : 'default' }}>
       <canvas ref={canvasRef} />
+
+      {/* WIN SCREEN */}
+      {gameState === 'win' && (
+        <div style={{
+          position: 'absolute', inset: 0,
+          background: 'radial-gradient(ellipse at center, rgba(30,20,5,0.98) 0%, rgba(5,3,0,1) 100%)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          zIndex: 9000,
+          animation: 'fadeIn 1.2s ease',
+        }}>
+          <div style={{ textAlign: 'center', maxWidth: '600px', padding: '40px' }}>
+            {/* Golden glow */}
+            <div style={{
+              fontSize: '72px', marginBottom: '16px',
+              filter: 'drop-shadow(0 0 40px rgba(212,168,67,0.9))',
+              animation: 'pulse 2s ease infinite',
+            }}>🌟</div>
+            <div style={{
+              fontFamily: '"Cinzel", serif', fontSize: '11px',
+              color: '#8b6914', letterSpacing: '0.4em', textTransform: 'uppercase',
+              marginBottom: '12px',
+            }}>Victory — The Quest is Complete</div>
+            <h1 style={{
+              fontFamily: '"Cinzel", serif', fontSize: '48px',
+              background: 'linear-gradient(135deg, #f0d68a, #d4a843, #8b6914)',
+              WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent',
+              backgroundClip: 'text',
+              margin: '0 0 8px', letterSpacing: '0.06em',
+              textShadow: '0 0 60px rgba(212,168,67,0.4)',
+            }}>
+              The Golden Fleece
+            </h1>
+            <p style={{
+              fontFamily: '"Cormorant Garamond", serif', fontSize: '20px',
+              color: '#a08040', fontStyle: 'italic', marginBottom: '40px', lineHeight: 1.6,
+            }}>
+              Against all odds, the ancient guardian has fallen.<br />
+              The Golden Fleece is yours, Professor Kaladze.
+            </p>
+            <div style={{ display: 'flex', gap: '16px', justifyContent: 'center' }}>
+              <button
+                onClick={() => { startGame(); }}
+                style={{
+                  padding: '14px 40px', fontFamily: '"Cinzel", serif',
+                  fontSize: '13px', letterSpacing: '0.25em', textTransform: 'uppercase',
+                  background: 'linear-gradient(135deg, #8b6914, #d4a843)',
+                  color: '#0a0a0f', border: 'none', cursor: 'pointer',
+                  boxShadow: '0 0 30px rgba(212,168,67,0.4)',
+                  transition: 'all 0.3s',
+                }}
+                onMouseEnter={e => e.currentTarget.style.boxShadow = '0 0 50px rgba(212,168,67,0.8)'}
+                onMouseLeave={e => e.currentTarget.style.boxShadow = '0 0 30px rgba(212,168,67,0.4)'}
+              >
+                Return to Menu
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* HUD */}
       {gameState === 'playing' && (
@@ -1270,12 +2063,170 @@ export default function GamePage({ onExit }: GamePageProps) {
         </div>
       )}
 
+      {/* LEVEL 2 PUZZLE OVERLAY — Ancient Seal of the Golden Ram */}
+      {puzzleOpen && (
+        <div style={{
+          position: 'absolute', inset: 0,
+          background: 'rgba(5, 10, 20, 0.92)',
+          backdropFilter: 'blur(6px)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          zIndex: 8000,
+        }}>
+          <div style={{
+            background: 'linear-gradient(160deg, #0f172a 0%, #1e1b12 100%)',
+            border: '2px solid #8b6914',
+            boxShadow: '0 0 60px rgba(212,168,67,0.18), inset 0 0 40px rgba(0,0,0,0.5)',
+            padding: '40px 48px',
+            maxWidth: '600px',
+            width: '92%',
+            position: 'relative',
+          }}>
+            {/* Corner ornaments */}
+            {(['tl','tr','bl','br'] as const).map(pos => (
+              <div key={pos} style={{
+                position: 'absolute', width: '18px', height: '18px',
+                borderColor: '#8b6914', borderStyle: 'solid', borderWidth: 0,
+                borderTopWidth: pos.startsWith('t') ? '2px' : 0,
+                borderBottomWidth: pos.startsWith('b') ? '2px' : 0,
+                borderLeftWidth: pos.endsWith('l') ? '2px' : 0,
+                borderRightWidth: pos.endsWith('r') ? '2px' : 0,
+                top: pos.startsWith('t') ? '10px' : 'auto',
+                bottom: pos.startsWith('b') ? '10px' : 'auto',
+                left: pos.endsWith('l') ? '10px' : 'auto',
+                right: pos.endsWith('r') ? '10px' : 'auto',
+              }} />
+            ))}
+
+            <p style={{ fontFamily: '"Cinzel", serif', fontSize: '9px', color: '#8b6914', letterSpacing: '0.3em', textTransform: 'uppercase', textAlign: 'center', marginBottom: '8px' }}>
+              Ancient Seal — Chamber of the Golden Ram
+            </p>
+            <h2 style={{ fontFamily: '"Cinzel", serif', color: '#f0d68a', fontSize: '20px', textAlign: 'center', marginBottom: '6px', letterSpacing: '0.06em' }}>
+              The Legend of the Golden Fleece
+            </h2>
+            <p style={{ fontFamily: '"Cormorant Garamond", serif', color: '#94a3b8', fontSize: '13px', textAlign: 'center', marginBottom: '28px', fontStyle: 'italic' }}>
+              Activate the relics in the correct chronological order to unseal the chamber.
+            </p>
+
+            {/* Sequence Progress display */}
+            <div style={{ display: 'flex', justifyContent: 'center', gap: '10px', marginBottom: '28px' }}>
+              {[0, 1, 2].map(i => {
+                const seq = gameRef.current.puzzleState.sequence;
+                const filled = seq.length > i;
+                const labels = ['①', '②', '③'];
+                return (
+                  <div key={i} style={{
+                    width: '36px', height: '36px',
+                    border: `2px solid ${filled ? '#d4a843' : '#334155'}`,
+                    borderRadius: '50%',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    color: filled ? '#d4a843' : '#475569',
+                    fontFamily: '"Cinzel", serif',
+                    fontSize: '14px',
+                    transition: 'all 0.2s',
+                    background: filled ? 'rgba(212,168,67,0.12)' : 'transparent',
+                  }}>
+                    {labels[i]}
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* The 3 Pillars */}
+            <div style={{ display: 'flex', gap: '16px', marginBottom: '28px', flexWrap: 'wrap', justifyContent: 'center' }}>
+              {[
+                { id: 0, title: 'Prince Phrixus', icon: '🐏', desc: 'The prince who fled on the Golden Ram to escape sacrifice, bringing the Fleece to Colchis.' },
+                { id: 1, title: 'King Aietes', icon: '👑', desc: 'The King of Colchis who received the ram\'s Fleece and hung it in the sacred grove of Ares.' },
+                { id: 2, title: "Ares' Sacred Grove", icon: '⚔️', desc: 'The divine grove where the Golden Fleece was guarded by an undying dragon until Jason arrived.' },
+              ].map(pillar => {
+                const alreadyUsed = gameRef.current.puzzleState.sequence.includes(pillar.id);
+                return (
+                  <button
+                    key={pillar.id}
+                    disabled={alreadyUsed}
+                    onClick={() => {
+                      const ps = gameRef.current.puzzleState;
+                      const newSeq = [...ps.sequence, pillar.id];
+                      gameRef.current.puzzleState.sequence = newSeq;
+                      setPuzzleRenderTick(t => t + 1);
+
+                      if (newSeq.length === 3) {
+                        const correct = newSeq[0] === 0 && newSeq[1] === 1 && newSeq[2] === 2;
+                        if (correct) {
+                          gameRef.current.puzzleState.completed = true;
+                          puzzleOpenRef.current = false;
+                          setPuzzleOpen(false);
+                          // Trigger boulder drop
+                          gameRef.current.boulderState.active = true;
+                          gameRef.current.boulderState.x = 1120;
+                          gameRef.current.boulderState.y = 34;
+                          gameRef.current.boulderState.speedY = 0;
+                          gameRef.current.shakeTimer = 0.2;
+                          setShowHint('The ancient seal breaks — a rumble echoes through the stone...');
+                          gameRef.current.hintTimer = 3;
+                          setPuzzleRenderTick(t => t + 1);
+                        } else {
+                          // Wrong order — reset
+                          setTimeout(() => {
+                            gameRef.current.puzzleState.sequence = [];
+                            setShowHint('The ancient magic rejects this order...');
+                            gameRef.current.hintTimer = 2.5;
+                            gameRef.current.shakeTimer = 0.3;
+                            setPuzzleRenderTick(t => t + 1);
+                          }, 400);
+                        }
+                      }
+                    }}
+                    style={{
+                      flex: '1 1 150px',
+                      background: alreadyUsed ? 'rgba(212,168,67,0.08)' : 'rgba(15, 23, 42, 0.9)',
+                      border: `1px solid ${alreadyUsed ? '#d4a843' : '#334155'}`,
+                      padding: '16px 12px',
+                      cursor: alreadyUsed ? 'default' : 'pointer',
+                      opacity: alreadyUsed ? 0.5 : 1,
+                      transition: 'all 0.2s',
+                      textAlign: 'center',
+                    }}
+                    onMouseEnter={e => { if (!alreadyUsed) e.currentTarget.style.borderColor = '#d4a843'; }}
+                    onMouseLeave={e => { if (!alreadyUsed) e.currentTarget.style.borderColor = '#334155'; }}
+                  >
+                    <div style={{ fontSize: '28px', marginBottom: '8px' }}>{pillar.icon}</div>
+                    <div style={{ fontFamily: '"Cinzel", serif', color: '#f0d68a', fontSize: '11px', marginBottom: '8px', letterSpacing: '0.08em' }}>{pillar.title}</div>
+                    <div style={{ fontFamily: '"Cormorant Garamond", serif', color: '#64748b', fontSize: '12px', lineHeight: 1.5 }}>{pillar.desc}</div>
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Footer buttons */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <button
+                onClick={() => { gameRef.current.puzzleState.sequence = []; setPuzzleRenderTick(t => t + 1); }}
+                style={{ fontFamily: '"Cinzel", serif', fontSize: '9px', color: '#475569', background: 'transparent', border: '1px solid #334155', padding: '6px 16px', cursor: 'pointer', letterSpacing: '0.1em' }}
+                onMouseEnter={e => e.currentTarget.style.color = '#94a3b8'}
+                onMouseLeave={e => e.currentTarget.style.color = '#475569'}
+              >
+                Reset
+              </button>
+              <button
+                onClick={() => { puzzleOpenRef.current = false; setPuzzleOpen(false); }}
+                style={{ fontFamily: '"Cinzel", serif', fontSize: '9px', color: 'rgba(212,168,67,0.5)', background: 'transparent', border: '1px solid rgba(212,168,67,0.25)', padding: '6px 18px', cursor: 'pointer', letterSpacing: '0.1em' }}
+                onMouseEnter={e => { e.currentTarget.style.color = '#d4a843'; e.currentTarget.style.borderColor = '#d4a843'; }}
+                onMouseLeave={e => { e.currentTarget.style.color = 'rgba(212,168,67,0.5)'; e.currentTarget.style.borderColor = 'rgba(212,168,67,0.25)'; }}
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* NPC DIALOGUE — floating box above NPC, no screen dim */}
+
       {dialogueNpc && (() => {
         const BOX_W = 380;
         const cvs = canvasRef.current;
-        const vw = cvs ? cvs.width  : window.innerWidth;
-        const vh = cvs ? cvs.height : window.innerHeight;
+        const vw = cvs ? cvs.clientWidth  : window.innerWidth;
+        const vh = cvs ? cvs.clientHeight : window.innerHeight;
 
         // Clamp so box never leaves the viewport
         let left = dialogueScreenPos.current.x - BOX_W / 2;

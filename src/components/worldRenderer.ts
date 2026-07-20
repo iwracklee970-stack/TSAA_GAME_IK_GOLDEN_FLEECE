@@ -25,6 +25,12 @@ export function drawBackground(
     return;
   }
 
+  // ── Shore: fully procedural sea, stormy sky, and parallax cliffs ──
+  if (level.type === 'shore') {
+    drawShoreBackground(ctx, cameraX, canvasW, canvasH);
+    return;
+  }
+
   let customBgDrawn = false;
   if (
     (level.type === 'ruins' ||
@@ -902,8 +908,11 @@ export function drawDecoration(ctx: CanvasRenderingContext2D, deco: Decoration, 
 }
 
 // ==============================
-// Torch Lighting Effect
+// Fog of War Lighting System
 // ==============================
+// zoneMask: optional array of screen-space rectangles that form the ONLY
+// region where the player's light is allowed to bleed through. Used to
+// prevent the mausoleum interior from leaking light to the exterior.
 export function drawLighting(
   ctx: CanvasRenderingContext2D,
   playerScreenX: number,
@@ -911,41 +920,86 @@ export function drawLighting(
   playerDir: 1 | -1,
   canvasW: number,
   canvasH: number,
-  radius: number
+  radius: number,
+  zoneMask?: { x: number; y: number; w: number; h: number } | null
 ) {
-  const tempCanvas = document.createElement('canvas');
-  tempCanvas.width = canvasW;
-  tempCanvas.height = canvasH;
-  const tempCtx = tempCanvas.getContext('2d')!;
+  // ── Step 1: Build the fog layer on an offscreen canvas ──────────────────
+  const fogCanvas = document.createElement('canvas');
+  fogCanvas.width  = canvasW;
+  fogCanvas.height = canvasH;
+  const fogCtx = fogCanvas.getContext('2d')!;
 
-  // Darkness overlay
-  tempCtx.fillStyle = 'rgba(0, 0, 0, 0.75)';
-  tempCtx.fillRect(0, 0, canvasW, canvasH);
+  // Start with complete pitch black
+  fogCtx.fillStyle = 'rgba(0, 0, 0, 1.0)';
+  fogCtx.fillRect(0, 0, canvasW, canvasH);
 
-  // Punch hole for torch light
-  tempCtx.globalCompositeOperation = 'destination-out';
-  const lightX = playerScreenX + (playerDir === 1 ? 20 : 4);
-  const lightY = playerScreenY + 18;
+  // If a zone mask is provided, clear it and fill it with 0.83 (10% reduced fog)
+  if (zoneMask) {
+    fogCtx.save();
+    fogCtx.globalCompositeOperation = 'destination-out';
+    fogCtx.fillRect(zoneMask.x, zoneMask.y, zoneMask.w, zoneMask.h);
+    
+    fogCtx.globalCompositeOperation = 'source-over';
+    fogCtx.fillStyle = 'rgba(0, 0, 0, 0.83)';
+    fogCtx.fillRect(zoneMask.x, zoneMask.y, zoneMask.w, zoneMask.h);
+    fogCtx.restore();
+  } else {
+    // If no zone mask, fill everything with 0.83
+    fogCtx.globalCompositeOperation = 'destination-out';
+    fogCtx.fillRect(0, 0, canvasW, canvasH);
+    
+    fogCtx.globalCompositeOperation = 'source-over';
+    fogCtx.fillStyle = 'rgba(0, 0, 0, 0.83)';
+    fogCtx.fillRect(0, 0, canvasW, canvasH);
+  }
 
-  const gradient = tempCtx.createRadialGradient(lightX, lightY, 15, lightX, lightY, radius);
-  gradient.addColorStop(0, 'rgba(255, 255, 255, 1)');
-  gradient.addColorStop(0.5, 'rgba(255, 255, 255, 0.6)');
-  gradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
+  // ── Step 2: Cut a visibility hole around the player ─────────────────────
+  fogCtx.globalCompositeOperation = 'destination-out';
 
-  tempCtx.fillStyle = gradient;
-  tempCtx.beginPath();
-  tempCtx.arc(lightX, lightY, radius, 0, Math.PI * 2);
-  tempCtx.fill();
+  const lightX = playerScreenX + (playerDir === 1 ? 14 : 10);
+  const lightY  = playerScreenY + 18;
 
-  // Warm torch tint
-  tempCtx.globalCompositeOperation = 'source-over';
-  const warmGrad = tempCtx.createRadialGradient(lightX, lightY, 0, lightX, lightY, radius * 0.7);
-  warmGrad.addColorStop(0, 'rgba(255, 180, 80, 0.08)');
-  warmGrad.addColorStop(1, 'rgba(255, 120, 40, 0)');
-  tempCtx.fillStyle = warmGrad;
-  tempCtx.fillRect(0, 0, canvasW, canvasH);
+  // If a zone mask is provided, only allow the hole inside that rectangle.
+  // This stops light bleeding through solid walls into the other zone.
+  if (zoneMask) {
+    fogCtx.save();
+    fogCtx.beginPath();
+    fogCtx.rect(zoneMask.x, zoneMask.y, zoneMask.w, zoneMask.h);
+    fogCtx.clip();
+  }
 
-  ctx.drawImage(tempCanvas, 0, 0);
+  // Radial gradient — bright core, sharp falloff at the edge
+  const gradient = fogCtx.createRadialGradient(lightX, lightY, 8, lightX, lightY, radius);
+  gradient.addColorStop(0,    'rgba(255,255,255,1.0)');
+  gradient.addColorStop(0.35, 'rgba(255,255,255,0.95)');
+  gradient.addColorStop(0.65, 'rgba(255,255,255,0.55)');
+  gradient.addColorStop(0.85, 'rgba(255,255,255,0.18)');
+  gradient.addColorStop(1,    'rgba(255,255,255,0)');
+
+  fogCtx.fillStyle = gradient;
+  fogCtx.beginPath();
+  fogCtx.arc(lightX, lightY, radius, 0, Math.PI * 2);
+  fogCtx.fill();
+
+  if (zoneMask) fogCtx.restore();
+
+  // ── Step 3: Add a warm amber tint inside the revealed area ─────────────
+  fogCtx.globalCompositeOperation = 'source-over';
+  if (zoneMask) {
+    fogCtx.save();
+    fogCtx.beginPath();
+    fogCtx.rect(zoneMask.x, zoneMask.y, zoneMask.w, zoneMask.h);
+    fogCtx.clip();
+  }
+  const warmGrad = fogCtx.createRadialGradient(lightX, lightY, 0, lightX, lightY, radius * 0.6);
+  warmGrad.addColorStop(0, 'rgba(255,200,100,0.06)');
+  warmGrad.addColorStop(1, 'rgba(255,120,40,0)');
+  fogCtx.fillStyle = warmGrad;
+  fogCtx.fillRect(0, 0, canvasW, canvasH);
+  if (zoneMask) fogCtx.restore();
+
+  // ── Step 4: Stamp the fog onto the main canvas ──────────────────────────
+  ctx.drawImage(fogCanvas, 0, 0);
 }
 
 // ==============================
@@ -994,3 +1048,355 @@ export function drawCheckpoint(
   ctx.shadowBlur = 0;
 }
 
+// ==============================
+// Shore Background (stormy sea, night sky, and parallax cliffs)
+// ==============================
+function drawShoreBackground(
+  ctx: CanvasRenderingContext2D,
+  cameraX: number,
+  canvasW: number,
+  canvasH: number
+) {
+  const t = Date.now();
+
+  // 1. Stormy Sky
+  const skyGrad = ctx.createLinearGradient(0, 0, 0, canvasH);
+  skyGrad.addColorStop(0, '#0a101f'); // Dark stormy blue
+  skyGrad.addColorStop(0.6, '#131c2e'); // Slate blue
+  skyGrad.addColorStop(1, '#1b1b22'); // Horizon
+  ctx.fillStyle = skyGrad;
+  ctx.fillRect(0, 0, canvasW, canvasH);
+
+  // Distant clouds
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.015)';
+  for (let i = 0; i < 5; i++) {
+    const cx = ((i * 350 - cameraX * 0.02) % (canvasW + 400)) - 200;
+    const cy = 40 + i * 20;
+    ctx.beginPath();
+    ctx.arc(cx, cy, 65, 0, Math.PI * 2);
+    ctx.arc(cx + 40, cy - 10, 85, 0, Math.PI * 2);
+    ctx.arc(cx + 90, cy, 65, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // 2. Far Mountains/Cliffs (Parallax factor 0.06)
+  ctx.fillStyle = '#090f1f';
+  ctx.beginPath();
+  const startX1 = -(cameraX * 0.06);
+  ctx.moveTo(startX1, canvasH);
+  for (let x = 0; x <= canvasW + 100; x += 40) {
+    const worldX = x + cameraX * 0.06;
+    const h = 180 + Math.sin(worldX * 0.003) * 60 + Math.cos(worldX * 0.007) * 20;
+    ctx.lineTo(x, canvasH - h);
+  }
+  ctx.lineTo(canvasW + 100, canvasH);
+  ctx.closePath();
+  ctx.fill();
+
+  // 3. Mid-ground Cliffs (Parallax factor 0.18)
+  ctx.fillStyle = '#111a2e';
+  ctx.beginPath();
+  const startX2 = -(cameraX * 0.18);
+  ctx.moveTo(startX2, canvasH);
+  for (let x = 0; x <= canvasW + 100; x += 30) {
+    const worldX = x + cameraX * 0.18;
+    const h = 120 + Math.sin(worldX * 0.006) * 40 + Math.cos(worldX * 0.015) * 15;
+    ctx.lineTo(x, canvasH - h);
+  }
+  ctx.lineTo(canvasW + 100, canvasH);
+  ctx.closePath();
+  ctx.fill();
+
+  // 4. Procedural Sea Water Waves on the Left
+  ctx.save();
+  const waterStart = -400 - cameraX;
+  const waterEnd = 300 - cameraX;
+  if (waterEnd > 0) {
+    const seaGrad = ctx.createLinearGradient(0, 420, 0, canvasH);
+    seaGrad.addColorStop(0, '#0d2238');
+    seaGrad.addColorStop(1, '#050c14');
+    ctx.fillStyle = seaGrad;
+
+    ctx.beginPath();
+    ctx.moveTo(waterStart, canvasH);
+    for (let wx = waterStart; wx <= waterEnd + 10; wx += 15) {
+      const waveOffset = Math.sin((wx + cameraX) * 0.05 + t * 0.003) * 5;
+      ctx.lineTo(wx, 420 + waveOffset);
+    }
+    ctx.lineTo(waterEnd, canvasH);
+    ctx.lineTo(waterStart, canvasH);
+    ctx.closePath();
+    ctx.fill();
+
+    // Wave highlights (foam)
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    for (let wx = waterStart; wx <= waterEnd; wx += 12) {
+      const waveOffset = Math.sin((wx + cameraX) * 0.05 + t * 0.003) * 5;
+      if (wx === waterStart) {
+        ctx.moveTo(wx, 420 + waveOffset);
+      } else {
+        ctx.lineTo(wx, 420 + waveOffset);
+      }
+    }
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+// ==============================
+// Boss: Chimera of Hades
+// ==============================
+export interface BossWeakSpot {
+  x: number;
+  y: number;
+  active: boolean;
+  timer: number;
+  pulseTimer: number;
+}
+
+export function drawBoss(
+  ctx: CanvasRenderingContext2D,
+  bossX: number,
+  bossY: number,
+  cameraX: number,
+  direction: number,
+  animTimer: number,
+  weakSpot: BossWeakSpot,
+  scale: number
+) {
+  const sx = (bossX - cameraX) * scale;
+  const sy = bossY * scale;
+  const sc = scale;
+
+  ctx.save();
+  ctx.translate(sx, sy);
+  ctx.scale(direction, 1);
+
+  const bob = Math.sin(animTimer * 3.0) * 2 * sc;
+
+  // Body
+  const bw = 100 * sc;
+  const bh = 70 * sc;
+  const bodyGrad = ctx.createRadialGradient(0, bob, 5 * sc, 0, bob, bw * 0.7);
+  bodyGrad.addColorStop(0, '#4a1520');
+  bodyGrad.addColorStop(0.6, '#2a0c10');
+  bodyGrad.addColorStop(1, '#100508');
+  ctx.fillStyle = bodyGrad;
+  ctx.beginPath();
+  ctx.ellipse(0, bob, bw / 2, bh / 2, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Magma veins
+  ctx.strokeStyle = `rgba(239,68,68,${0.4 + Math.sin(animTimer * 5) * 0.2})`;
+  ctx.lineWidth = 2 * sc;
+  for (let i = 0; i < 5; i++) {
+    const angle = (i / 5) * Math.PI + 0.3;
+    ctx.beginPath();
+    ctx.moveTo(Math.cos(angle) * 10 * sc, bob + Math.sin(angle) * 10 * sc);
+    ctx.lineTo(Math.cos(angle) * 35 * sc, bob + Math.sin(angle) * 25 * sc);
+    ctx.stroke();
+  }
+
+  // Spine spikes
+  ctx.fillStyle = '#1c0c10';
+  for (let i = 0; i < 6; i++) {
+    const px = (-40 + i * 14) * sc;
+    const py = -bh / 2 - 5 * sc + bob;
+    const sh = (10 + Math.sin(i + animTimer * 4) * 4) * sc;
+    ctx.beginPath();
+    ctx.moveTo(px - 5 * sc, py);
+    ctx.lineTo(px, py - sh);
+    ctx.lineTo(px + 5 * sc, py);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  // Neck
+  ctx.fillStyle = '#2a0c10';
+  ctx.beginPath();
+  ctx.ellipse(48 * sc, -10 * sc + bob, 16 * sc, 22 * sc, 0.3, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Head
+  const headX = 65 * sc;
+  const headY = -24 * sc + bob;
+  const hw = 36 * sc;
+  const hh = 28 * sc;
+  const headGrad = ctx.createRadialGradient(headX, headY, 4 * sc, headX, headY, hw);
+  headGrad.addColorStop(0, '#3d1218');
+  headGrad.addColorStop(1, '#160608');
+  ctx.fillStyle = headGrad;
+  ctx.beginPath();
+  ctx.ellipse(headX, headY, hw, hh, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Horns
+  ctx.fillStyle = '#0a0305';
+  [[-12, 0.4], [8, -0.3]].forEach(([ox, tilt]) => {
+    ctx.save();
+    ctx.translate(headX + ox * sc, headY - hh);
+    ctx.rotate(tilt as number);
+    ctx.beginPath();
+    ctx.moveTo(-4 * sc, 0);
+    ctx.lineTo(0, -16 * sc);
+    ctx.lineTo(4 * sc, 0);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  });
+
+  // Eye
+  const eyeX = headX + 14 * sc;
+  const eyeY = headY - 4 * sc;
+  const eyeGlow = ctx.createRadialGradient(eyeX, eyeY, 0, eyeX, eyeY, 10 * sc);
+  eyeGlow.addColorStop(0, `rgba(255,100,0,${0.9 + Math.sin(animTimer * 8) * 0.1})`);
+  eyeGlow.addColorStop(1, 'rgba(255,0,0,0)');
+  ctx.fillStyle = eyeGlow;
+  ctx.beginPath();
+  ctx.arc(eyeX, eyeY, 10 * sc, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#ff6400';
+  ctx.beginPath();
+  ctx.arc(eyeX, eyeY, 4 * sc, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Tail
+  ctx.strokeStyle = '#2a0c10';
+  ctx.lineWidth = 10 * sc;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(-bw / 2, bob);
+  ctx.quadraticCurveTo(
+    -bw / 2 - 40 * sc,
+    bob + 20 * sc + Math.sin(animTimer * 2.5) * 15 * sc,
+    -bw / 2 - 70 * sc,
+    bob - 10 * sc
+  );
+  ctx.stroke();
+  ctx.fillStyle = '#0a0305';
+  ctx.beginPath();
+  ctx.moveTo(-bw / 2 - 68 * sc, bob - 8 * sc);
+  ctx.lineTo(-bw / 2 - 82 * sc, bob - 20 * sc);
+  ctx.lineTo(-bw / 2 - 58 * sc, bob - 18 * sc);
+  ctx.closePath();
+  ctx.fill();
+
+  // Legs
+  ctx.strokeStyle = '#2a0c10';
+  ctx.lineWidth = 8 * sc;
+  [[-30, 1], [30, -1]].forEach(([ox, flip]) => {
+    const legBob = Math.sin(animTimer * 6 + (ox as number)) * 8 * sc * (flip as number);
+    ctx.beginPath();
+    ctx.moveTo((ox as number) * sc, bh / 2 + bob);
+    ctx.lineTo((ox as number) * sc, bh / 2 + 28 * sc + legBob + bob);
+    ctx.stroke();
+    ctx.fillStyle = '#0a0305';
+    ctx.beginPath();
+    ctx.ellipse((ox as number) * sc, bh / 2 + 34 * sc + legBob + bob, 10 * sc, 5 * sc, 0, 0, Math.PI * 2);
+    ctx.fill();
+  });
+
+  // Weak Spot
+  if (weakSpot.active) {
+    const wsX = weakSpot.x * sc;
+    const wsY = weakSpot.y * sc + bob;
+    const pulse = 0.6 + Math.sin(weakSpot.pulseTimer * 12) * 0.4;
+    const wsr = 14 * sc * pulse;
+
+    const wsGlow = ctx.createRadialGradient(wsX, wsY, 0, wsX, wsY, wsr * 2.5);
+    wsGlow.addColorStop(0, `rgba(255,200,50,${0.8 * pulse})`);
+    wsGlow.addColorStop(0.5, `rgba(255,120,0,${0.4 * pulse})`);
+    wsGlow.addColorStop(1, 'rgba(255,60,0,0)');
+    ctx.fillStyle = wsGlow;
+    ctx.beginPath();
+    ctx.arc(wsX, wsY, wsr * 2.5, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = `rgba(255,230,80,${pulse})`;
+    ctx.beginPath();
+    ctx.arc(wsX, wsY, wsr, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.strokeStyle = `rgba(255,255,200,${0.9 * pulse})`;
+    ctx.lineWidth = 2 * sc;
+    ctx.beginPath();
+    ctx.arc(wsX, wsY, wsr * 1.4, 0, Math.PI * 2);
+    ctx.stroke();
+
+    ctx.strokeStyle = `rgba(255,160,0,${0.7 * pulse})`;
+    ctx.lineWidth = 1.5 * sc;
+    for (let a = 0; a < 4; a++) {
+      const ang = (a / 4) * Math.PI * 2 + weakSpot.pulseTimer * 2;
+      ctx.beginPath();
+      ctx.moveTo(wsX + Math.cos(ang) * wsr, wsY + Math.sin(ang) * wsr);
+      ctx.lineTo(wsX + Math.cos(ang) * wsr * 1.6, wsY + Math.sin(ang) * wsr * 1.6);
+      ctx.stroke();
+    }
+  }
+
+  ctx.restore();
+}
+
+// ==============================
+// Boss Health Bar HUD
+// ==============================
+export function drawBossHealthBar(
+  ctx: CanvasRenderingContext2D,
+  hp: number,
+  maxHp: number,
+  canvasW: number,
+  scale: number
+) {
+  const blockW = 28 * scale;
+  const blockH = 16 * scale;
+  const gap = 4 * scale;
+  const totalW = maxHp * blockW + (maxHp - 1) * gap;
+  const startX = (canvasW - totalW) / 2;
+  const y = 18 * scale;
+
+  ctx.fillStyle = 'rgba(0,0,0,0.6)';
+  const padX = 12 * scale;
+  const padY = 6 * scale;
+  ctx.beginPath();
+  if (ctx.roundRect) {
+    ctx.roundRect(startX - padX, y - padY, totalW + padX * 2, blockH + padY * 2 + 16 * scale, 6 * scale);
+  } else {
+    ctx.rect(startX - padX, y - padY, totalW + padX * 2, blockH + padY * 2 + 16 * scale);
+  }
+  ctx.fill();
+
+  ctx.fillStyle = '#ef4444';
+  ctx.font = `bold ${Math.round(10 * scale)}px monospace`;
+  ctx.textAlign = 'center';
+  ctx.fillText('\u2694 CHIMERA OF HADES \u2694', canvasW / 2, y + 2 * scale);
+
+  for (let i = 0; i < maxHp; i++) {
+    const bx = startX + i * (blockW + gap);
+    const by = y + 13 * scale;
+    const alive = i < hp;
+
+    ctx.fillStyle = '#1a0a10';
+    ctx.fillRect(bx + 2 * scale, by + 2 * scale, blockW, blockH);
+
+    if (alive) {
+      const blockGrad = ctx.createLinearGradient(bx, by, bx, by + blockH);
+      blockGrad.addColorStop(0, '#dc2626');
+      blockGrad.addColorStop(1, '#7f1d1d');
+      ctx.fillStyle = blockGrad;
+    } else {
+      ctx.fillStyle = '#2a1010';
+    }
+    ctx.fillRect(bx, by, blockW, blockH);
+
+    if (alive) {
+      ctx.fillStyle = 'rgba(255,255,255,0.15)';
+      ctx.fillRect(bx + 2 * scale, by + 2 * scale, blockW - 4 * scale, blockH * 0.4);
+    }
+
+    ctx.strokeStyle = alive ? '#ef4444' : '#4a1520';
+    ctx.lineWidth = 1.5 * scale;
+    ctx.strokeRect(bx, by, blockW, blockH);
+  }
+}

@@ -36,6 +36,7 @@ export const LEVELS: Level[] = [
       { x: 740, y: 330, w: 40, h: 100, style: 'stone' },
       { x: 780, y: 310, w: 40, h: 120, style: 'stone' },
       { x: 820, y: 290, w: 180, h: 140, style: 'stone' }, // Landing platform
+      { x: 1000, y: 0, w: 20, h: 430, style: 'stone' }, // Right boundary wall
     ],
     triggers: [
       {
@@ -113,15 +114,115 @@ export const LEVELS: Level[] = [
   },
 
   // ============================================
-  // LEVEL 1 — Temple of Athena (Tutorial, NO enemies)
-  // Teach: movement, jumping, lever→door puzzle
+  // LEVEL 1 — The Shore of Colchis
   // ============================================
   {
     id: 1,
+    name: "The Shore of Colchis",
+    type: 'shore',
+    entrance: { x: 60, y: 380 },
+    exit: { x: 1350, y: 180 },
+    platforms: [
+      // Starting water boundary platform (not solid, but keeps player on land)
+      { x: -200, y: 460, w: 500, h: 60, style: 'stone', color: '#1e3a5a' },
+      // Land
+      { x: 300, y: 420, w: 300, h: 100, style: 'moss', color: '#1b3f1b' },
+      // Stairs ascending to Mausoleum closed gate
+      { x: 600, y: 400, w: 40, h: 120, style: 'stone' },
+      { x: 640, y: 380, w: 40, h: 140, style: 'stone' },
+      { x: 680, y: 360, w: 120, h: 160, style: 'stone' },
+      // The high vertical wall containing the gate
+      { x: 800, y: 160, w: 30, h: 200, style: 'stone' },
+      // New platform spanning the gap between wall and wood platform
+      { x: 830, y: 160, w: 90, h: 20, style: 'stone' },
+      // Wood platform (destructible) - placed at x: 920, y: 160
+      { x: 920, y: 160, w: 80, h: 15, style: 'stone', color: '#8b5a2b' }, // Custom color for wood look
+      // Cliff on the right with the boulder slope
+      { x: 1000, y: 160, w: 100, h: 20, style: 'stone' },
+      { x: 1100, y: 140, w: 50, h: 40, style: 'stone' },
+      { x: 1150, y: 120, w: 50, h: 60, style: 'stone' },
+      { x: 1200, y: 0, w: 200, h: 180, style: 'stone' }, // Right boundary wall / boulder nesting place
+      // Platform above the puzzle where the boulder sits
+      { x: 1020, y: 50, w: 180, h: 15, style: 'stone' },
+      
+       { x: 1160, y: 260, w: 240, h: 220, style: 'stone' }, // Exit wall / exit ground
+    ],
+    triggers: [
+      {
+        id: 'exit_2',
+        rect: { x: 1350, y: 180, w: 50, h: 80 },
+        type: 'exit',
+        activated: false,
+      },
+    ],
+    doors: [
+      {
+        id: 'exit_door_2',
+        x: 1350,
+        y: 180,
+        w: 50,
+        h: 80,
+        open: true,
+        openProgress: 1.0,
+        color: '#d4a843',
+      },
+      // The Closed Gate at the bottom of mausoleum
+      {
+        id: 'closed_gate_2',
+        x: 800,
+        y: 280,
+        w: 30,
+        h: 80,
+        open: false,
+        openProgress: 0,
+        color: '#2563eb', // Blue gate
+      }
+    ],
+    enemies: [],
+    collectibles: [],
+    decorations: [
+      { x: 380, y: 360, type: 'torch' },
+      { x: 1200, y: 200, type: 'torch' },
+    ],
+    checkpoints: [
+      { id: 'cp_2a', x: 350, y: 370, activated: false },
+      { id: 'cp_2b', x: 1170, y: 210, activated: false },
+    ],
+    ladders: [
+      { x: 950, y: 160, w: 20, h: 320 }, // Revealed ladder inside mausoleum (usable after wood breaks)
+    ],
+    npcs: [
+      {
+        id: 'npc_level2',
+        x: 460,
+        y: 372,
+        w: 24,
+        h: 48,
+        name: 'Wandering Scholar',
+        dialogue: [
+          "Ah, another traveler seeking the Golden Fleece... or what remains of it.",
+          "The path ahead is blocked, but this Grappling Hook might help you scale the cliffs.",
+          "Simply press 'E' when near an anchor point to launch it.",
+          "Beware of the ancient mausoleum... only those who know the legend of the Golden Ram may enter."
+        ]
+      }
+    ],
+    grapples: [
+      { x: 760, y: 180 }, // Upper grappling hook point on the wall
+    ],
+    backgrounds: ['#0f172a', '#1e293b', '#334155'],
+  },
+
+  // ============================================
+  // LEVEL 2 — Temple of Athena (Tutorial, NO enemies)
+  // Teach: movement, jumping, lever→door puzzle
+  // ============================================
+  {
+    id: 2,
     name: 'Temple of Athena',
     type: 'ruins',
     entrance: { x: 60, y: 320 },
-    exit: { x: 2400, y: 280 },
+    exit: { x: 2500, y: 320 },
     platforms: [
       // Ground
       { x: -100, y: 400, w: 600, h: 120, style: 'stone' },
@@ -129,34 +230,40 @@ export const LEVELS: Level[] = [
       { x: 600, y: 370, w: 120, h: 30, style: 'marble' },
       { x: 780, y: 330, w: 100, h: 30, style: 'marble' },
       { x: 940, y: 290, w: 100, h: 30, style: 'marble' },
-      // Upper platform with lever
+      // Upper platform with lever (accessible via double-jump from stepping stones)
       { x: 1080, y: 250, w: 200, h: 30, style: 'column_top' },
+      // High secret platform for olive branch (reachable by double-jumping from lever platform)
+      { x: 1110, y: 160, w: 80, h: 20, style: 'marble' },
       // Platform after door
       { x: 1400, y: 400, w: 400, h: 120, style: 'stone' },
       // Bridge platforms
       { x: 1850, y: 350, w: 120, h: 30, style: 'marble' },
       { x: 2020, y: 310, w: 120, h: 30, style: 'marble' },
       // Exit area
-      { x: 2180, y: 400, w: 400, h: 120, style: 'stone' },
-      // Secret high platform (olive branch)
+      { x: 2180, y: 400, w: 1200, h: 120, style: 'stone' },
+      // Cavern tunnel enclosing exit portal (stretched out to block background)
+      { x: 2180, y: 0, w: 1200, h: 240, style: 'stone' }, // Cave ceiling
+      { x: 2550, y: 240, w: 800, h: 160, style: 'stone' }, // Cave right wall
     ],
     triggers: [
       {
-        id: 'exit_1',
-        rect: { x: 2400, y: 320, w: 50, h: 80 },
+        id: 'exit_2',
+        rect: { x: 2500, y: 320, w: 50, h: 80 },
         type: 'exit',
         activated: false,
       },
     ],
     doors: [
+      // Golden exit door — opens by proximity when player approaches (shifted right)
       {
-        id: 'door_1',
-        x: 2400,
+        id: 'door_2',
+        x: 2500,
         y: 320,
         w: 50,
         h: 80,
         open: false,
         openProgress: 0,
+        color: '#d4a843',
       },
     ],
     enemies: [
@@ -164,93 +271,20 @@ export const LEVELS: Level[] = [
       { x: 1950, y: 220, w: 28, h: 24, start: 1850, end: 2100, speed: 80, type: 'harpy', animFrame: 0, animTimer: 0, alive: true, flyOffset: 0.5 },
     ],
     collectibles: [
-      { id: 'olive_1', x: 930, y: 155, type: 'olive_branch', collected: false },
+      // Olive branch placed on the reachable high secret platform above the lever
+      { id: 'olive_1', x: 1130, y: 130, type: 'olive_branch', collected: false },
       { id: 'apple_1', x: 1600, y: 360, type: 'golden_apple', collected: false },
     ],
     decorations: [
       { x: 100, y: 340, type: 'pillar' },
       { x: 350, y: 340, type: 'broken_pillar' },
       { x: 1500, y: 340, type: 'torch' },
-      { x: 2250, y: 340, type: 'statue' },
     ],
     checkpoints: [
-      { id: 'cp_1a', x: 1450, y: 370, activated: false },
+      { id: 'cp_2a', x: 1450, y: 362, activated: false },
     ],
+    npcs: [],
     backgrounds: ['#1a1005', '#2c1e0f', '#3d2b1a'],
-  },
-
-  // ============================================
-  // LEVEL 2 — Poseidon's Grotto
-  // New: 1 Harpy + checkpoint mid-level
-  // ============================================
-  {
-    id: 2,
-    name: "Poseidon's Grotto",
-    type: 'underwater',
-    entrance: { x: 60, y: 300 },
-    exit: { x: 2600, y: 300 },
-    platforms: [
-      // Start area
-      { x: -100, y: 420, w: 400, h: 100, style: 'stone', color: '#1e3a5a' },
-      // Pressure plate area
-      { x: 400, y: 380, w: 200, h: 30, style: 'marble', color: '#1d4ed8' },
-      // Post-door platforms
-      { x: 750, y: 420, w: 300, h: 100, style: 'stone', color: '#1e3a5a' },
-      // Vertical climb
-      { x: 1100, y: 360, w: 100, h: 30, style: 'marble', color: '#1d4ed8' },
-      { x: 1250, y: 300, w: 100, h: 30, style: 'marble', color: '#1d4ed8' },
-      { x: 1100, y: 240, w: 100, h: 30, style: 'marble', color: '#1d4ed8' },
-      // Upper plateau with lever
-      { x: 1300, y: 200, w: 250, h: 30, style: 'column_top', color: '#1e3a5a' },
-      // Second section
-      { x: 1650, y: 420, w: 500, h: 100, style: 'stone', color: '#1e3a5a' },
-      // Jump islands
-      { x: 2200, y: 370, w: 100, h: 30, style: 'marble', color: '#1d4ed8' },
-      // Exit
-      { x: 2400, y: 420, w: 400, h: 100, style: 'stone', color: '#1e3a5a' },
-    ],
-    triggers: [
-      {
-        id: 'exit_2',
-        rect: { x: 2600, y: 340, w: 50, h: 80 },
-        type: 'exit',
-        activated: false,
-      },
-    ],
-    doors: [
-      {
-        id: 'door_2',
-        x: 2600,
-        y: 340,
-        w: 50,
-        h: 80,
-        open: false,
-        openProgress: 0,
-      },
-    ],
-    enemies: [
-      // Ground skeleton patrol
-      { x: 1700, y: 388, w: 28, h: 32, start: 1660, end: 2100, speed: 80, type: 'skeleton', animFrame: 0, animTimer: 0, alive: true },
-      // ── NEW: Harpy — patrols above the vertical climb section ──
-      // Placed at y:160 so the player must jump to reach bullet range
-      { x: 1130, y: 160, w: 28, h: 24, start: 1050, end: 1380, speed: 90, type: 'harpy', animFrame: 0, animTimer: 0, alive: true, flyOffset: 0 },
-    ],
-    collectibles: [
-      { id: 'olive_2', x: 1150, y: 200, type: 'olive_branch', collected: false },
-      { id: 'apple_2', x: 2250, y: 330, type: 'golden_apple', collected: false },
-      { id: 'ammo_2', x: 780, y: 390, type: 'ammo_refill', collected: false },
-    ],
-    decorations: [
-      { x: 50,   y: 360, type: 'vines' },
-      { x: 800,  y: 360, type: 'pillar' },
-      { x: 1700, y: 360, type: 'torch' },
-      { x: 2500, y: 360, type: 'broken_pillar' },
-    ],
-    checkpoints: [
-      { id: 'cp_2a', x: 800, y: 390, activated: false },
-      { id: 'cp_2b', x: 1700, y: 390, activated: false },
-    ],
-    backgrounds: ['#06101e', '#0c1e36', '#12304e'],
   },
 
   // ============================================
@@ -262,7 +296,7 @@ export const LEVELS: Level[] = [
     name: 'The Labyrinth',
     type: 'labyrinth',
     entrance: { x: 60, y: 300 },
-    exit: { x: 2800, y: 300 },
+    exit: { x: 2850, y: 320 },
     platforms: [
       // Start
       { x: -100, y: 400, w: 500, h: 120, style: 'stone' },
@@ -281,14 +315,17 @@ export const LEVELS: Level[] = [
       // Second lever platform
       { x: 2320, y: 230, w: 200, h: 30, style: 'column_top' },
       // Exit area
-      { x: 2600, y: 400, w: 400, h: 120, style: 'stone' },
+      { x: 2600, y: 400, w: 1200, h: 120, style: 'stone' },
+      // Cavern tunnel enclosing exit portal (blocks background on the right)
+      { x: 2600, y: 0, w: 1200, h: 240, style: 'stone' }, // Cave ceiling
+      { x: 2900, y: 240, w: 900, h: 160, style: 'stone' }, // Cave right wall
       // Secret upper path
       { x: 1400, y: 130, w: 80, h: 20, style: 'marble' },
     ],
     triggers: [
       {
         id: 'exit_3',
-        rect: { x: 2800, y: 320, w: 50, h: 80 },
+        rect: { x: 2850, y: 320, w: 50, h: 80 },
         type: 'exit',
         activated: false,
       },
@@ -296,7 +333,7 @@ export const LEVELS: Level[] = [
     doors: [
       {
         id: 'door_3',
-        x: 2800,
+        x: 2850,
         y: 320,
         w: 50,
         h: 80,
@@ -310,13 +347,6 @@ export const LEVELS: Level[] = [
       { x: 1650, y: 368, w: 28, h: 32, start: 1560, end: 1920, speed: 110, type: 'skeleton', animFrame: 0, animTimer: 0, alive: true },
       // ── NEW: Harpy — patrols high above the mid-section ──
       { x: 1000, y: 220, w: 28, h: 24, start: 880, end: 1280, speed: 110, type: 'harpy', animFrame: 0, animTimer: 0, alive: true, flyOffset: 1.2 },
-      // ── NEW: Wall Lurker — protrudes from the right side of the narrow corridor before door_3a ──
-      // x/y = wall attachment point; w = max extend; h = height of hazard
-      {
-        x: 1518, y: 335, w: 36, h: 50, start: 0, end: 36, speed: 60,
-        type: 'wall_lurker', animFrame: 0, animTimer: 0, alive: true,
-        lurkerSide: 'left', lurkerPhase: 'waiting', lurkerTimer: 0, lurkerExtend: 0,
-      },
     ],
     collectibles: [
       { id: 'olive_3',  x: 1420, y: 100, type: 'olive_branch', collected: false },
@@ -326,9 +356,7 @@ export const LEVELS: Level[] = [
     decorations: [
       { x: 200,  y: 340, type: 'torch' },
       { x: 550,  y: 340, type: 'bones' },
-      { x: 1600, y: 340, type: 'pillar' },
       { x: 1850, y: 340, type: 'torch' },
-      { x: 2650, y: 340, type: 'statue' },
     ],
     checkpoints: [
       { id: 'cp_3a', x: 1600, y: 370, activated: false },
@@ -338,108 +366,93 @@ export const LEVELS: Level[] = [
   },
 
   // ============================================
-  // LEVEL 4 — Hades' Gate (final, all mechanics)
-  // New: 2 Harpies + 2 Wall Lurkers + checkpoints
+  // LEVEL 4 — Hades' Gate (Boss Fight)
   // ============================================
   {
     id: 4,
     name: "Hades' Gate",
     type: 'underworld',
-    entrance: { x: 60, y: 300 },
-    exit: { x: 3200, y: 250 },
+    entrance: { x: 60, y: 350 },
+    exit: { x: 2480, y: 360 },
     platforms: [
-      // Entrance
-      { x: -100, y: 400, w: 400, h: 120, style: 'stone' },
-      // First gap
+      // ── Entrance corridor ──
+      { x: -100, y: 400, w: 500, h: 120, style: 'stone' },
+      // Step up
       { x: 400, y: 370, w: 100, h: 30, style: 'marble' },
-      { x: 560, y: 330, w: 100, h: 30, style: 'marble' },
-      // Pressure plate section
-      { x: 720, y: 400, w: 300, h: 120, style: 'stone' },
-      // Post door 1
-      { x: 1120, y: 400, w: 300, h: 120, style: 'stone' },
-      // Vertical section
-      { x: 1480, y: 350, w: 100, h: 30, style: 'marble' },
-      { x: 1630, y: 290, w: 100, h: 30, style: 'marble' },
-      { x: 1480, y: 230, w: 100, h: 30, style: 'marble' },
-      // Lever platform
-      { x: 1650, y: 180, w: 200, h: 30, style: 'column_top' },
-      // Bridge
-      { x: 1900, y: 400, w: 500, h: 120, style: 'stone' },
-      // Gauntlet
-      { x: 2500, y: 370, w: 120, h: 30, style: 'marble' },
-      { x: 2680, y: 330, w: 120, h: 30, style: 'marble' },
-      // Final platform with fleece
-      { x: 2900, y: 400, w: 500, h: 120, style: 'stone' },
-      // Secret
-      { x: 1700, y: 80, w: 80, h: 20, style: 'marble' },
+      { x: 560, y: 340, w: 100, h: 30, style: 'marble' },
+      // Pre-arena ground
+      { x: 720, y: 400, w: 600, h: 120, style: 'stone' },
+      // ── Boss Arena (x: 1300 to x: 2300) ──
+      // Arena floor
+      { x: 1300, y: 400, w: 1000, h: 120, style: 'stone' },
+      // Arena ceiling
+      { x: 1300, y: 0,   w: 1000, h: 60,  style: 'stone' },
+      // Arena LEFT wall (entry side — becomes solid once fight starts)
+      { x: 1280, y: 60,  w: 20,   h: 340, style: 'stone' },
+      // Arena RIGHT wall (exit side — becomes solid until boss dies, drawn dynamically)
+      { x: 2300, y: 60,  w: 20,   h: 340, style: 'stone' },
+      // Floating platforms inside arena (for dodging + ammo)
+      { x: 1380, y: 280, w: 120,  h: 20,  style: 'marble' },
+      { x: 1600, y: 200, w: 120,  h: 20,  style: 'marble' },
+      { x: 1820, y: 270, w: 120,  h: 20,  style: 'marble' },
+      { x: 2050, y: 200, w: 120,  h: 20,  style: 'marble' },
+      { x: 2160, y: 300, w: 100,  h: 20,  style: 'marble' },
+      // ── Post-arena: Fleece alcove ──
+      { x: 2320, y: 400, w: 300,  h: 120, style: 'stone' },
     ],
     triggers: [
       {
         id: 'exit_4',
-        rect: { x: 3200, y: 320, w: 50, h: 80 },
+        rect: { x: 2480, y: 320, w: 50, h: 80 },
         type: 'exit',
         activated: false,
       },
     ],
     doors: [
+      // Arena entry gate (player presses E here to start fight)
+      {
+        id: 'boss_gate',
+        x: 1300,
+        y: 60,
+        w: 20,
+        h: 340,
+        open: false,
+        openProgress: 0,
+        color: '#7f1d1d',
+      },
+      // Progression exit door (appears after boss death)
       {
         id: 'door_4',
-        x: 3200,
+        x: 2480,
         y: 320,
         w: 50,
         h: 80,
         open: false,
         openProgress: 0,
+        color: '#d4a843',
       },
     ],
     enemies: [
-      // Ground skeletons
-      { x: 1200, y: 368, w: 28, h: 32, start: 1130, end: 1400, speed: 100, type: 'skeleton', animFrame: 0, animTimer: 0, alive: true },
-      { x: 2000, y: 368, w: 28, h: 32, start: 1910, end: 2380, speed: 120, type: 'skeleton', animFrame: 0, animTimer: 0, alive: true },
-      { x: 2700, y: 298, w: 28, h: 32, start: 2690, end: 2790, speed: 70,  type: 'skeleton', animFrame: 0, animTimer: 0, alive: true },
-      // ── NEW: Harpies ──
-      // Harpy 1 — above the vertical climb section, very aggressive
-      { x: 1500, y: 180, w: 28, h: 24, start: 1400, end: 1750, speed: 130, type: 'harpy', animFrame: 0, animTimer: 0, alive: true, flyOffset: 0.5 },
-      // Harpy 2 — over the gauntlet platforms (forces aerial fight)
-      { x: 2540, y: 260, w: 28, h: 24, start: 2460, end: 2800, speed: 120, type: 'harpy', animFrame: 0, animTimer: 0, alive: true, flyOffset: 2.1 },
-      // ── NEW: Wall Lurkers ──
-      // Lurker 1 — right side of narrow corridor before door_4b
-      {
-        x: 1858, y: 335, w: 40, h: 50, start: 0, end: 40, speed: 70,
-        type: 'wall_lurker', animFrame: 0, animTimer: 0, alive: true,
-        lurkerSide: 'right', lurkerPhase: 'waiting', lurkerTimer: 0, lurkerExtend: 0,
-      },
-      // Lurker 2 — left side of the final bridge approach (tighter timing)
-      {
-        x: 1900, y: 340, w: 44, h: 50, start: 0, end: 44, speed: 85,
-        type: 'wall_lurker', animFrame: 0, animTimer: 0, alive: true,
-        lurkerSide: 'left', lurkerPhase: 'waiting', lurkerTimer: 2.2, lurkerExtend: 0,
-      },
-      // Lurker 3 — Ceiling Lurker in Level 4 (over the final path)
-      {
-        x: 2150, y: 120, w: 50, h: 120, start: 0, end: 120, speed: 120,
-        type: 'wall_lurker', animFrame: 0, animTimer: 0, alive: true,
-        lurkerSide: 'ceiling', lurkerPhase: 'waiting', lurkerTimer: 1.0, lurkerExtend: 0,
-      },
+      // Two skeletons in the entrance corridor to warm up
+      { x: 800, y: 368, w: 28, h: 32, start: 730, end: 1080, speed: 100, type: 'skeleton', animFrame: 0, animTimer: 0, alive: true },
+      { x: 950, y: 368, w: 28, h: 32, start: 730, end: 1080, speed: 120, type: 'skeleton', animFrame: 0, animTimer: 0, alive: true },
     ],
     collectibles: [
-      { id: 'olive_4',  x: 1720, y: 50,  type: 'olive_branch', collected: false },
-      { id: 'fleece',   x: 3100, y: 360, type: 'golden_fleece', collected: false },
-      { id: 'ammo_4',   x: 1150, y: 370, type: 'ammo_refill', collected: false },
+      { id: 'ammo_4a', x: 760,  y: 370, type: 'ammo_refill', collected: false },
+      { id: 'ammo_4b', x: 1000, y: 370, type: 'ammo_refill', collected: false },
+      // The Golden Fleece — spawns after boss defeated
+      { id: 'fleece', x: 2400, y: 360, type: 'golden_fleece', collected: false },
     ],
     decorations: [
       { x: 100,  y: 340, type: 'torch' },
       { x: 500,  y: 330, type: 'bones' },
-      { x: 1200, y: 340, type: 'torch' },
-      { x: 1950, y: 340, type: 'statue' },
-      { x: 2300, y: 340, type: 'torch' },
-      { x: 3000, y: 340, type: 'pillar' },
-      { x: 3150, y: 340, type: 'torch' },
+      { x: 900,  y: 340, type: 'torch' },
+      { x: 2380, y: 340, type: 'torch' },
     ],
     checkpoints: [
       { id: 'cp_4a', x: 1150, y: 370, activated: false },
-      { id: 'cp_4b', x: 1950, y: 370, activated: false },
     ],
     backgrounds: ['#100508', '#1a0a10', '#250f18'],
   },
+
 ];
