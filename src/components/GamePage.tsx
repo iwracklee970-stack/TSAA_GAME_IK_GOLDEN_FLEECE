@@ -9,6 +9,7 @@ import {
   drawLadder, drawNPCLibrarian, drawInteractionTooltip, drawFloatingTextHint,
   drawBoss, drawBossHealthBar,
 } from './worldRenderer';
+import { soundEngine } from '../audioEngine';
 
 // ==============================
 // Game Constants
@@ -146,6 +147,10 @@ export default function GamePage({ onExit }: GamePageProps) {
   // Ref for levelIndex so the game loop always sees the current value
   const levelIndexRef = useRef(0);
 
+  const footstepTimerRef = useRef(0);
+  const wasGroundedRef = useRef(false);
+  const [audioMuted, setAudioMuted] = useState(soundEngine.getIsMuted());
+
   const bgImagesRef = useRef<{
     far: HTMLImageElement | HTMLCanvasElement | null;
     mid: HTMLImageElement | HTMLCanvasElement | null;
@@ -271,6 +276,7 @@ export default function GamePage({ onExit }: GamePageProps) {
       gameRef.current.levels = levels;
       const level = levels[lvlIndex];
       gameRef.current.level = level;
+      soundEngine.startLevelMusic(level.id);
       const newPlayer = createPlayer(level);
       // If the gun was already collected in this level run, restore it
       const gunItem = level.collectibles.find(c => c.type === 'gun');
@@ -403,6 +409,8 @@ export default function GamePage({ onExit }: GamePageProps) {
     setLevelIndex(0);
     levelIndexRef.current = 0;
     resetPlayer(0, false);
+    soundEngine.ensureContext();
+    soundEngine.startLevelMusic(0);
     setGameState('playing');
     setShowHint('Arrow keys to move, Space to jump/double-jump, L to dash, J to shoot');
     gameRef.current.hintTimer = 5;
@@ -426,6 +434,7 @@ export default function GamePage({ onExit }: GamePageProps) {
       const newHealth = player.health - 1;
       player.health = newHealth;
       player.invincibleTimer = 1.5;
+      soundEngine.playHit(true);
       setPlayerHealth(newHealth); // update HUD
 
       if (newHealth <= 0) {
@@ -450,16 +459,27 @@ export default function GamePage({ onExit }: GamePageProps) {
     };
   }, [resetPlayer]);
 
-  // Keyboard
+  // Keyboard and Pointer interaction to unlock AudioContext
   useEffect(() => {
+    soundEngine.startLevelMusic(LEVELS[levelIndexRef.current]?.id ?? 0);
+
+    const handleGesture = () => {
+      soundEngine.ensureContext();
+    };
     const down = (e: KeyboardEvent) => {
+      soundEngine.ensureContext();
       gameRef.current.keys[e.code] = true;
       if (e.code === 'Escape') onExit();
     };
     const up = (e: KeyboardEvent) => { gameRef.current.keys[e.code] = false; };
+
+    window.addEventListener('pointerdown', handleGesture);
+    window.addEventListener('click', handleGesture);
     window.addEventListener('keydown', down);
     window.addEventListener('keyup', up);
     return () => {
+      window.removeEventListener('pointerdown', handleGesture);
+      window.removeEventListener('click', handleGesture);
       window.removeEventListener('keydown', down);
       window.removeEventListener('keyup', up);
     };
@@ -626,6 +646,7 @@ export default function GamePage({ onExit }: GamePageProps) {
         bs.active = false;
         gameRef.current.woodPlatformDestroyed = true;
         gameRef.current.shakeTimer = 0.6; // screen shake on impact
+        soundEngine.playBoulderImpact();
       }
 
       // Check Danger Zone (lethal proximity to rolling/falling boulder)
@@ -661,17 +682,22 @@ export default function GamePage({ onExit }: GamePageProps) {
     if (gameRef.current.shootCooldown > 0) gameRef.current.shootCooldown -= dt;
 
     // --- Shooting Logic ---
-    if (keys['KeyJ'] && gameRef.current.shootCooldown <= 0 && player.bullets > 0 && player.hasGun) {
-      player.bullets--;
-      gameRef.current.shootCooldown = 0.5; // Half second between shots
-      bullets.push({
-        id: Math.random().toString(36).substr(2, 9),
-        x: player.x + (player.direction === 1 ? player.width : 0),
-        y: player.y + 12,
-        direction: player.direction,
-        speed: 1200,
-        active: true
-      });
+    if (keys['KeyJ'] && gameRef.current.shootCooldown <= 0) {
+      if (player.bullets > 0 && player.hasGun) {
+        player.bullets--;
+        gameRef.current.shootCooldown = 0.5; // Half second between shots
+        soundEngine.playShoot();
+        bullets.push({
+          id: Math.random().toString(36).substr(2, 9),
+          x: player.x + (player.direction === 1 ? player.width : 0),
+          y: player.y + 12,
+          direction: player.direction,
+          speed: 1200,
+          active: true
+        });
+      } else if (player.hasGun && player.bullets <= 0) {
+        soundEngine.playEmptyClick();
+      }
       keys['KeyJ'] = false; // Prevent rapid fire
     }
 
@@ -810,10 +836,12 @@ export default function GamePage({ onExit }: GamePageProps) {
             player.hasDoubleJumped = false;
             player.jumpReleased = false;
             player.canAirDash = true;
+            soundEngine.playJump();
           } else if (player.jumpReleased && !player.hasDoubleJumped) {
             player.vy = JUMP_FORCE;
             player.hasDoubleJumped = true;
             player.jumpReleased = false;
+            soundEngine.playJump();
           }
         }
 
@@ -827,6 +855,7 @@ export default function GamePage({ onExit }: GamePageProps) {
             player.dashInvincible = true;
             if (!player.grounded) player.canAirDash = false;
             player.afterimages = [];
+            soundEngine.playDash();
             keys['KeyL'] = false;
           }
         }
@@ -977,6 +1006,23 @@ export default function GamePage({ onExit }: GamePageProps) {
       }
     });
 
+    // --- Footstep & Landing Sound FX ---
+    if (player.grounded && Math.abs(player.vx) > 30 && !player.isDashing && !player.isClimbing) {
+      footstepTimerRef.current += dt;
+      const stepInterval = Math.abs(player.vx) > 200 ? 0.25 : 0.38;
+      if (footstepTimerRef.current >= stepInterval) {
+        footstepTimerRef.current = 0;
+        soundEngine.playFootstep();
+      }
+    } else {
+      footstepTimerRef.current = 0;
+    }
+
+    if (!wasGroundedRef.current && player.grounded) {
+      soundEngine.playLand();
+    }
+    wasGroundedRef.current = player.grounded;
+
     // --- Tick invincibility ---
     if (player.invincibleTimer > 0) {
       player.invincibleTimer -= dt;
@@ -1099,11 +1145,13 @@ export default function GamePage({ onExit }: GamePageProps) {
       // LEVEL 4: Boss gate interaction
       if (level.id === 4 && !gameRef.current.bossState.active && !gameRef.current.bossState.completed) {
         const gate = level.doors.find(d => d.id === 'boss_gate');
-        if (gate && !gate.open && Math.abs(player.x - 1295) < 80 && Math.abs(player.y - 350) < 80) {
+        if (gate && !gate.open && Math.abs(player.x - 1995) < 80 && Math.abs(player.y - 350) < 80) {
           // Start the boss fight
           gameRef.current.bossState.active = true;
+          soundEngine.startBossMusic();
+          soundEngine.playBossRoar();
           gameRef.current.bossState.hp = 6;
-          gameRef.current.bossState.x = 1750;
+          gameRef.current.bossState.x = 2500;
           gameRef.current.bossState.y = 330;
           gameRef.current.bossState.vx = 140;
           gameRef.current.bossState.animTimer = 0;
@@ -1116,7 +1164,7 @@ export default function GamePage({ onExit }: GamePageProps) {
           gate.open = false;
           gate.openProgress = 0;
           // Push player into arena
-          player.x = 1350;
+          player.x = 2050;
           setShowHint('The gate seals behind you... defeat the Chimera!');
           gameRef.current.hintTimer = 3;
         }
@@ -1189,6 +1237,7 @@ export default function GamePage({ onExit }: GamePageProps) {
                            player.y + player.height > trigger.rect.y;
           if (touching) {
             trigger.activated = true;
+            soundEngine.playDoorOpen();
             const door = level.doors.find(d => d.id === trigger.linkedDoorId);
             if (door) door.open = true;
             setShowHint('Lever flipped! The door opens...');
@@ -1223,6 +1272,7 @@ export default function GamePage({ onExit }: GamePageProps) {
       const dist = Math.hypot(player.x - item.x, player.y - item.y);
       if (dist < 30) {
         item.collected = true;
+        soundEngine.playPickup(item.type);
         if (item.type === 'ammo_refill') {
           player.bullets = Math.min(6, player.bullets + 1);
           setShowHint('Found 1 Bullet');
@@ -1240,6 +1290,7 @@ export default function GamePage({ onExit }: GamePageProps) {
         }
         if (item.type === 'golden_fleece' && level.id === 4) {
           // Victory!
+          soundEngine.startTriumphMusic();
           setGameState('win');
           return;
         }
@@ -1343,8 +1394,10 @@ export default function GamePage({ onExit }: GamePageProps) {
 
         if (isHit) {
           b.active = false;
+          soundEngine.playHit(false);
           if (enemy.type !== 'wall_lurker') {
             enemy.alive = false;
+            soundEngine.playEnemyDefeat();
           }
         }
       });
@@ -1395,10 +1448,10 @@ export default function GamePage({ onExit }: GamePageProps) {
       // Animation timer
       bs.animTimer += dt;
 
-      // Movement — bounce between arena walls (x: 1320 to x: 2270)
+      // Movement — bounce between arena walls (x: 2000 to x: 3100)
       bs.x += bs.vx * dt;
-      if (bs.x > 2220) { bs.x = 2220; bs.vx = -Math.abs(bs.vx); bs.direction = -1; }
-      if (bs.x < 1380) { bs.x = 1380; bs.vx = Math.abs(bs.vx); bs.direction = 1; }
+      if (bs.x > 3020) { bs.x = 3020; bs.vx = -Math.abs(bs.vx); bs.direction = -1; }
+      if (bs.x < 2080) { bs.x = 2080; bs.vx = Math.abs(bs.vx); bs.direction = 1; }
       // Face player
       if (player.x > bs.x) { bs.direction = 1; } else { bs.direction = -1; }
 
@@ -1443,6 +1496,7 @@ export default function GamePage({ onExit }: GamePageProps) {
             ws.timer = 1.5;
             bs.hp -= 1;
             gameRef.current.shakeTimer = 0.25;
+            soundEngine.playBossHit();
             setBossHp(bs.hp);
             if (bs.hp <= 0) {
               // Boss defeated!
@@ -1450,11 +1504,13 @@ export default function GamePage({ onExit }: GamePageProps) {
               bs.completed = true;
               bossActiveRef.current = false;
               setBossActive(false);
+              soundEngine.playBossDefeat();
+              soundEngine.startTriumphMusic();
               // Open the exit: remove the right wall block and open door_4
               const exitDoor = level.doors.find(d => d.id === 'door_4');
               if (exitDoor) { exitDoor.open = true; exitDoor.openProgress = 1; }
               // Remove arena right-wall platform so player can walk out
-              const wallIdx = level.platforms.findIndex(p => p.x === 2300 && p.y === 60 && p.h === 340);
+              const wallIdx = level.platforms.findIndex(p => p.x === 3100 && p.y === 60 && p.h === 340);
               if (wallIdx >= 0) level.platforms.splice(wallIdx, 1);
               setShowHint('The Chimera falls! The Golden Fleece awaits...');
               gameRef.current.hintTimer = 4;
@@ -1473,17 +1529,22 @@ export default function GamePage({ onExit }: GamePageProps) {
         takeDamageRef.current(false, bs.x);
       }
 
-      // Ammo spawning — periodically drop an ammo box on a platform during the fight
+      // Ammo spawning — periodically drop an ammo box on top of arena platforms during the fight
       bs.ammoSpawnTimer -= dt;
       if (bs.ammoSpawnTimer <= 0) {
-        bs.ammoSpawnTimer = 10 + Math.random() * 6;
-        // Check if there are any uncollected ammo boxes in the arena
-        const arenaAmmo = level.collectibles.filter(c => c.type === 'ammo_refill' && !c.collected && c.x > 1300 && c.x < 2300);
-        if (arenaAmmo.length < 2) {
-          // Spawn ammo on one of the floating platforms
+        bs.ammoSpawnTimer = 8 + Math.random() * 5;
+        // Check if there are any uncollected ammo boxes inside the arena
+        const arenaAmmo = level.collectibles.filter(c => c.type === 'ammo_refill' && !c.collected && c.x >= 2000 && c.x <= 3100);
+        if (arenaAmmo.length < 3) {
+          // Spawn ammo directly on top of the floating platforms or arena floor
           const spawnSpots = [
-            { x: 1430, y: 258 }, { x: 1650, y: 178 }, { x: 1870, y: 248 },
-            { x: 2100, y: 178 }, { x: 2200, y: 278 },
+            { x: 2130, y: 250 }, // On top of floating platform 1 (y: 280)
+            { x: 2350, y: 170 }, // On top of floating platform 2 (y: 200)
+            { x: 2570, y: 240 }, // On top of floating platform 3 (y: 270)
+            { x: 2800, y: 170 }, // On top of floating platform 4 (y: 200)
+            { x: 3000, y: 270 }, // On top of floating platform 5 (y: 300)
+            { x: 2180, y: 370 }, // On top of arena floor left
+            { x: 2880, y: 370 }, // On top of arena floor right
           ];
           const spot = spawnSpots[Math.floor(Math.random() * spawnSpots.length)];
           level.collectibles.push({
@@ -1857,9 +1918,9 @@ export default function GamePage({ onExit }: GamePageProps) {
 
     // Level 4 Boss Gate prompt
     if (level.id === 4 && !gameRef.current.bossState.active && !gameRef.current.bossState.completed) {
-      if (Math.abs(player.x - 1295) < 80 && Math.abs(player.y - 350) < 80) {
+      if (Math.abs(player.x - 1995) < 80 && Math.abs(player.y - 350) < 80) {
         promptText = "[E] Enter the Arena";
-        promptX = 1295;
+        promptX = 1995;
         promptY = 300;
       }
     }
@@ -1879,8 +1940,10 @@ export default function GamePage({ onExit }: GamePageProps) {
       }
     }
 
-    // 9. Fog-of-War Lighting
-    drawLighting(ctx, player.x - camera.x, player.y, player.direction, scaledW, scaledH, TORCH_RADIUS, null);
+    // 9. Fog-of-War Lighting (Level 3 / Temple of Athena: lighter & wider torch light; Level 4 & 5: dark cavern fog)
+    const currentRadius = level.id === 2 ? 360 : TORCH_RADIUS;
+    const currentFogAlpha = level.id === 2 ? 0.35 : 0.83;
+    drawLighting(ctx, player.x - camera.x, player.y, player.direction, scaledW, scaledH, currentRadius, null, currentFogAlpha);
 
     // 10. Level 2 Foreground Rain (drawn after lighting, in scaled space)
     if (level.id === 1) {
@@ -1929,7 +1992,7 @@ export default function GamePage({ onExit }: GamePageProps) {
   };
 
   return (
-    <div className="game-fullscreen" style={{ cursor: (gameState === 'playing' && !bookOpen && !dialogueNpc) ? 'none' : 'default' }}>
+    <div className="game-fullscreen" style={{ cursor: (gameState === 'playing' && !bookOpen && !dialogueNpc && !puzzleOpen) ? 'none' : 'default' }}>
       <canvas ref={canvasRef} />
 
       {/* WIN SCREEN */}
@@ -1968,7 +2031,7 @@ export default function GamePage({ onExit }: GamePageProps) {
               color: '#a08040', fontStyle: 'italic', marginBottom: '40px', lineHeight: 1.6,
             }}>
               Against all odds, the ancient guardian has fallen.<br />
-              The Golden Fleece is yours, Professor Kaladze.
+              The Golden Fleece is yours.
             </p>
             <div style={{ display: 'flex', gap: '16px', justifyContent: 'center' }}>
               <button
@@ -2011,18 +2074,42 @@ export default function GamePage({ onExit }: GamePageProps) {
               {renderHearts()}
             </div>
 
-            {/* Dash cooldown indicator */}
-            <div style={{
-              background: 'rgba(10, 10, 15, 0.8)',
-              backdropFilter: 'blur(8px)',
-              padding: '8px 14px',
-              borderRight: '3px solid #c45b3c',
-              fontFamily: '"Press Start 2P", monospace',
-              fontSize: '8px',
-              color: gameRef.current.player.dashCooldown <= 0 ? '#6b7c3e' : '#8b3a25',
-              letterSpacing: '0.1em',
-            }}>
-              DASH [{gameRef.current.player.dashCooldown <= 0 ? 'READY' : '...'}]
+            {/* Dash & Audio controls HUD */}
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+              <div
+                onClick={() => {
+                  const muted = soundEngine.toggleMute();
+                  setAudioMuted(muted);
+                }}
+                style={{
+                  background: 'rgba(10, 10, 15, 0.8)',
+                  backdropFilter: 'blur(8px)',
+                  padding: '8px 12px',
+                  border: '1px solid rgba(212, 168, 67, 0.3)',
+                  borderRight: '3px solid #d4a843',
+                  fontFamily: '"Cinzel", serif',
+                  fontSize: '10px',
+                  color: audioMuted ? '#ef4444' : '#d4a843',
+                  cursor: 'pointer',
+                  userSelect: 'none',
+                  letterSpacing: '0.1em',
+                }}
+                title="Click to Mute/Unmute Audio"
+              >
+                {audioMuted ? '🔇 MUTED' : '🔊 AUDIO'}
+              </div>
+              <div style={{
+                background: 'rgba(10, 10, 15, 0.8)',
+                backdropFilter: 'blur(8px)',
+                padding: '8px 14px',
+                borderRight: '3px solid #c45b3c',
+                fontFamily: '"Press Start 2P", monospace',
+                fontSize: '8px',
+                color: gameRef.current.player.dashCooldown <= 0 ? '#6b7c3e' : '#8b3a25',
+                letterSpacing: '0.1em',
+              }}>
+                DASH [{gameRef.current.player.dashCooldown <= 0 ? 'READY' : '...'}]
+              </div>
             </div>
           </div>
 
@@ -2070,7 +2157,9 @@ export default function GamePage({ onExit }: GamePageProps) {
           background: 'rgba(5, 10, 20, 0.92)',
           backdropFilter: 'blur(6px)',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
-          zIndex: 8000,
+          zIndex: 9999,
+          cursor: 'default',
+          pointerEvents: 'auto',
         }}>
           <div style={{
             background: 'linear-gradient(160deg, #0f172a 0%, #1e1b12 100%)',
@@ -2157,6 +2246,7 @@ export default function GamePage({ onExit }: GamePageProps) {
                           setPuzzleOpen(false);
                           // Trigger boulder drop
                           gameRef.current.boulderState.active = true;
+                          soundEngine.playBoulderRoll();
                           gameRef.current.boulderState.x = 1120;
                           gameRef.current.boulderState.y = 34;
                           gameRef.current.boulderState.speedY = 0;
@@ -2382,7 +2472,7 @@ export default function GamePage({ onExit }: GamePageProps) {
                   <div style={{ flex: 1, height: '1px', background: 'linear-gradient(90deg, #8b6914, transparent)' }} />
                 </div>
                 <p style={{ fontFamily: '"Cinzel", serif', fontSize: '11px', color: '#8b6914', letterSpacing: '0.35em', textTransform: 'uppercase', marginBottom: '10px' }}>
-                  Personal Journal — E. Kaladze
+                  Personal Journal — Expedition Archives
                 </p>
                 <h2 style={{ fontFamily: '"Cinzel", serif', color: '#f0d68a', fontSize: '34px', marginBottom: '6px', letterSpacing: '0.08em', textShadow: '0 0 20px rgba(212,168,67,0.4)' }}>
                   Tbilisi, 1938

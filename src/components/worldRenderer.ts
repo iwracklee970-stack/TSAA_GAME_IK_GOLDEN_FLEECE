@@ -819,91 +819,128 @@ export function drawFloatingTextHint(ctx: CanvasRenderingContext2D, x: number, y
 // ==============================
 export function drawDecoration(ctx: CanvasRenderingContext2D, deco: Decoration, cameraX: number) {
   const x = deco.x - cameraX;
-  const y = deco.y;
+  const y = deco.y; // Platform top surface coordinate
 
   switch (deco.type) {
-    case 'pillar':
+    case 'pillar': {
+      // Base pedestal resting flush on y
+      ctx.fillStyle = '#6a5a4a';
+      ctx.fillRect(x - 3, y - 6, 26, 6);
+      // Shaft
       ctx.fillStyle = '#b8a88a';
-      ctx.fillRect(x, y - 50, 20, 60);
+      ctx.fillRect(x, y - 66, 20, 60);
+      // Capital top
       ctx.fillStyle = '#d4c4a0';
-      ctx.fillRect(x - 4, y - 54, 28, 6);
-      ctx.fillRect(x - 2, y + 6, 24, 6);
-      // Fluting
-      ctx.fillStyle = 'rgba(0,0,0,0.08)';
-      for (let i = 3; i < 18; i += 5) {
-        ctx.fillRect(x + i, y - 48, 1, 54);
+      ctx.fillRect(x - 4, y - 72, 28, 6);
+      ctx.fillRect(x - 2, y - 66, 24, 3);
+      // Fluting lines
+      ctx.fillStyle = 'rgba(0,0,0,0.12)';
+      for (let i = 4; i < 18; i += 5) {
+        ctx.fillRect(x + i, y - 66, 1, 60);
       }
       break;
+    }
 
-    case 'broken_pillar':
+    case 'broken_pillar': {
+      // Base resting flush on y
+      ctx.fillStyle = '#6a5a4a';
+      ctx.fillRect(x - 3, y - 6, 26, 6);
       ctx.fillStyle = '#9a8a6a';
-      ctx.fillRect(x, y - 15, 20, 25);
+      ctx.fillRect(x, y - 36, 20, 30);
+      // Jagged broken top
       ctx.fillStyle = '#b8a88a';
-      ctx.fillRect(x - 2, y + 6, 24, 6);
-      // Broken top
-      ctx.fillStyle = '#9a8a6a';
-      ctx.fillRect(x + 2, y - 20, 6, 5);
-      ctx.fillRect(x + 12, y - 18, 5, 3);
+      ctx.fillRect(x + 2, y - 42, 6, 6);
+      ctx.fillRect(x + 11, y - 40, 5, 4);
       break;
+    }
 
     case 'torch':
-      // Bracket
-      ctx.fillStyle = '#5a4a3a';
-      ctx.fillRect(x + 4, y - 25, 4, 20);
-      ctx.fillRect(x, y - 30, 12, 6);
-      // Flame (animated)
-      const flicker = Math.sin(Date.now() / 150 + x) * 2;
-      ctx.fillStyle = '#ff8c00';
-      ctx.fillRect(x + 1 + flicker, y - 40, 10, 10);
-      ctx.fillStyle = '#ffcc00';
-      ctx.fillRect(x + 3 + flicker, y - 38, 6, 6);
-      ctx.fillStyle = '#fff4cc';
-      ctx.fillRect(x + 4 + flicker, y - 36, 4, 3);
-      // Torch glow
-      ctx.shadowBlur = 30;
-      ctx.shadowColor = 'rgba(255, 140, 0, 0.3)';
-      ctx.fillStyle = 'rgba(255, 200, 0, 0.01)';
-      ctx.fillRect(x - 20, y - 60, 50, 50);
-      ctx.shadowBlur = 0;
-      break;
+    case 'brazier': {
+      // Standing Brazier / Torch resting flush on platform top y
+      const flicker = Math.sin(Date.now() / 120 + x * 0.1) * 2;
+      const flicker2 = Math.cos(Date.now() / 90 + x * 0.05) * 1.5;
 
-    case 'statue':
-      // Simple Greek statue silhouette
-      ctx.fillStyle = '#8a8a7a';
-      // Head
-      ctx.fillRect(x + 6, y - 50, 8, 8);
-      // Body
-      ctx.fillRect(x + 4, y - 42, 12, 20);
-      // Base
-      ctx.fillRect(x, y - 22, 20, 4);
-      ctx.fillRect(x - 2, y - 18, 24, 28);
+      // Iron Tripod Base resting on y
+      ctx.fillStyle = '#2a221b';
+      ctx.fillRect(x - 6, y - 3, 14, 3); // Base plate
+      ctx.fillRect(x - 4, y - 18, 3, 15); // Left leg
+      ctx.fillRect(x + 3, y - 18, 3, 15); // Right leg
+      ctx.fillRect(x - 1, y - 24, 4, 21); // Main stem
+
+      // Bronze Bowl
+      ctx.fillStyle = '#8b6914';
+      ctx.fillRect(x - 7, y - 28, 16, 5);
+      ctx.fillStyle = '#d4a843';
+      ctx.fillRect(x - 5, y - 29, 12, 2);
+
+      // Multi-layer Dancing Flame
+      ctx.fillStyle = '#ea580c';
+      ctx.fillRect(x - 4 + flicker, y - 42, 10, 14);
+      ctx.fillStyle = '#f59e0b';
+      ctx.fillRect(x - 2 + flicker2, y - 40, 6, 10);
+      ctx.fillStyle = '#fef08a';
+      ctx.fillRect(x - 1 + flicker, y - 37, 4, 6);
+
+      // Torch Light Radial Glow
+      ctx.save();
+      const glow = ctx.createRadialGradient(x + 1, y - 34, 4, x + 1, y - 34, 45);
+      glow.addColorStop(0, 'rgba(245, 158, 11, 0.25)');
+      glow.addColorStop(0.5, 'rgba(234, 88, 12, 0.1)');
+      glow.addColorStop(1, 'rgba(0, 0, 0, 0)');
+      ctx.fillStyle = glow;
+      ctx.beginPath();
+      ctx.arc(x + 1, y - 34, 45, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+      break;
+    }
+
+    case 'urn': {
+      // Ancient Greek amphora sitting on platform surface y
+      ctx.fillStyle = '#9a5232'; // Terracotta
+      ctx.fillRect(x - 4, y - 4, 10, 4); // Base
+      ctx.fillRect(x - 7, y - 18, 16, 14); // Body
+      ctx.fillRect(x - 4, y - 22, 10, 4); // Neck
+      ctx.fillRect(x - 5, y - 24, 12, 2); // Rim
+      // Handles
+      ctx.strokeStyle = '#6b321a';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x - 9, y - 20, 3, 10);
+      ctx.strokeRect(x + 8, y - 20, 3, 10);
+      break;
+    }
+
+    case 'statue': {
       ctx.fillStyle = '#6a6a5a';
-      ctx.fillRect(x + 8, y - 38, 6, 2);
+      ctx.fillRect(x - 4, y - 6, 28, 6);
+      ctx.fillStyle = '#8a8a7a';
+      ctx.fillRect(x, y - 22, 20, 16);
+      ctx.fillRect(x + 4, y - 42, 12, 20);
+      ctx.fillRect(x + 6, y - 52, 8, 10);
       break;
+    }
 
-    case 'vines':
+    case 'vines': {
       ctx.fillStyle = '#3a5a30';
-      ctx.fillRect(x, y - 30, 2, 40);
+      ctx.fillRect(x, y - 40, 2, 40);
       ctx.fillStyle = '#4a6741';
-      ctx.fillRect(x - 3, y - 20, 4, 4);
-      ctx.fillRect(x + 2, y - 10, 4, 4);
-      ctx.fillRect(x - 2, y, 4, 4);
+      ctx.fillRect(x - 3, y - 30, 4, 4);
+      ctx.fillRect(x + 2, y - 20, 4, 4);
+      ctx.fillRect(x - 2, y - 10, 4, 4);
       break;
+    }
 
-    case 'bones':
+    case 'bones': {
       ctx.fillStyle = '#d8d0c0';
-      // Bone 1
-      ctx.fillRect(x, y + 2, 12, 2);
-      ctx.fillRect(x - 1, y, 3, 2);
-      ctx.fillRect(x + 10, y, 3, 2);
-      // Bone 2 (crossed)
-      ctx.fillRect(x + 4, y - 2, 2, 10);
-      // Skull
-      ctx.fillRect(x + 14, y - 2, 6, 6);
+      ctx.fillRect(x, y - 2, 12, 2);
+      ctx.fillRect(x - 1, y - 4, 3, 2);
+      ctx.fillRect(x + 10, y - 4, 3, 2);
+      ctx.fillRect(x + 14, y - 6, 6, 6);
       ctx.fillStyle = '#1a0a05';
-      ctx.fillRect(x + 15, y, 1, 2);
-      ctx.fillRect(x + 18, y, 1, 2);
+      ctx.fillRect(x + 15, y - 4, 1, 2);
+      ctx.fillRect(x + 18, y - 4, 1, 2);
       break;
+    }
   }
 }
 
@@ -921,7 +958,8 @@ export function drawLighting(
   canvasW: number,
   canvasH: number,
   radius: number,
-  zoneMask?: { x: number; y: number; w: number; h: number } | null
+  zoneMask?: { x: number; y: number; w: number; h: number } | null,
+  fogAlpha: number = 0.83
 ) {
   // ── Step 1: Build the fog layer on an offscreen canvas ──────────────────
   const fogCanvas = document.createElement('canvas');
@@ -933,23 +971,23 @@ export function drawLighting(
   fogCtx.fillStyle = 'rgba(0, 0, 0, 1.0)';
   fogCtx.fillRect(0, 0, canvasW, canvasH);
 
-  // If a zone mask is provided, clear it and fill it with 0.83 (10% reduced fog)
+  // If a zone mask is provided, clear it and fill it with fogAlpha
   if (zoneMask) {
     fogCtx.save();
     fogCtx.globalCompositeOperation = 'destination-out';
     fogCtx.fillRect(zoneMask.x, zoneMask.y, zoneMask.w, zoneMask.h);
     
     fogCtx.globalCompositeOperation = 'source-over';
-    fogCtx.fillStyle = 'rgba(0, 0, 0, 0.83)';
+    fogCtx.fillStyle = `rgba(0, 0, 0, ${fogAlpha})`;
     fogCtx.fillRect(zoneMask.x, zoneMask.y, zoneMask.w, zoneMask.h);
     fogCtx.restore();
   } else {
-    // If no zone mask, fill everything with 0.83
+    // If no zone mask, fill everything with fogAlpha
     fogCtx.globalCompositeOperation = 'destination-out';
     fogCtx.fillRect(0, 0, canvasW, canvasH);
     
     fogCtx.globalCompositeOperation = 'source-over';
-    fogCtx.fillStyle = 'rgba(0, 0, 0, 0.83)';
+    fogCtx.fillStyle = `rgba(0, 0, 0, ${fogAlpha})`;
     fogCtx.fillRect(0, 0, canvasW, canvasH);
   }
 
